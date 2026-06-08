@@ -17,6 +17,18 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 1.24 — Switch between a WHOOP 4 and a 5.0/MG (Mac + Android)
+
+- **Fixed (macOS + Android): you couldn't switch straps once one was bonded.** The Live screen's strap
+  picker was gated on `!bonded` — but `bonded` is **sticky** (it survives a disconnect, meaning "this
+  strap is paired"), so after the first successful pairing the picker disappeared for good. A user with
+  both a WHOOP 4 and a 5.0/MG was then stuck: the scan kept targeting the first strap's service
+  (`61080001` vs `fd4b0001`), so the other strap was never discovered. The picker now shows whenever
+  you're **not actively streaming** (`!(connected && bonded)`), and changing the selection calls a new
+  `prepareForModelSwitch()` (`BLEManager`/`WhoopBleClient`) that drops the current strap and clears the
+  sticky `connected`/`bonded` state, so the newly-picked model bonds fresh. Pick the strap → Scan &
+  Connect. macOS builds clean; full Android unit suite green.
+
 ## 1.23 — WHOOP 5.0/MG historical decode parity (Android)
 
 - **Added (Android): WHOOP 5.0/MG type-47 v18 historical records now decode on Android** — bringing it to

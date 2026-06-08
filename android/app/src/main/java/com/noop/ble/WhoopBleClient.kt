@@ -502,6 +502,17 @@ class WhoopBleClient(
     }
 
     /**
+     * Switch which strap we'll connect to next: drop the current strap and clear the **sticky** bond
+     * state so a newly-picked model bonds fresh. Without this, `bonded` stayed true from the first strap,
+     * which hid the strap picker and kept the scan pointed at the old family's service — so a user with
+     * both a WHOOP 4 and a 5/MG couldn't switch between them. Mirrors macOS BLEManager.prepareForModelSwitch.
+     */
+    fun prepareForModelSwitch() {
+        disconnect()
+        _state.value = _state.value.copy(connected = false, bonded = false)
+    }
+
+    /**
      * Send a command to the strap.
      * Port of `BLEManager.send(_:payload:writeType:)` — builds the framed COMMAND packet via
      * [Framing.buildCommand] and writes it to the command characteristic (61080002).

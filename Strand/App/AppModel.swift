@@ -162,6 +162,10 @@ final class AppModel: ObservableObject {
     }
     func disconnect() { ble.disconnect() }
 
+    /// Drop the current strap and clear bond state so a newly-picked strap model connects fresh
+    /// (lets a user with both a WHOOP 4 and a 5/MG switch between them).
+    func prepareStrapSwitch() { ble.prepareForModelSwitch() }
+
     /// Enable the realtime stream + mark it wanted so the keep-alive re-arms it (can't lapse).
     func startRealtimeHR() { ble.startRealtime() }
     /// Stop the realtime stream (the lightweight 0x2A37 HR keeps recording regardless).

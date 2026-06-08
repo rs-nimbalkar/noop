@@ -238,6 +238,17 @@ public final class BLEManager: NSObject, ObservableObject {
         central.stopScan()
     }
 
+    /// Switch which strap we'll connect to next: drop the current strap and clear the **sticky** bond
+    /// state so a newly-picked model bonds fresh. `bonded` deliberately survives a disconnect (it means
+    /// "this strap is paired"), but that left a user with BOTH a WHOOP 4 and a 5/MG unable to switch —
+    /// `bonded` stayed true from the first strap, which hid the strap picker and kept the scan pointed at
+    /// the old family's service. Call this when the user changes the strap selection.
+    public func prepareForModelSwitch() {
+        disconnect()
+        state.connected = false
+        state.bonded = false
+    }
+
     /// Apply the raw-outbox retention policy (24h synced window / 50MB unsynced cap).
     /// Called when the app enters the background; no-op without a concrete store.
     public func pruneRaw() {

@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "1.23"
+    static let currentVersion = "1.24"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,13 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "1.24",
+            title: "Switch between your WHOOP 4 and 5.0 (Mac + Android)",
+            date: "June 2026",
+            items: [
+                "Fixed: if you own both a WHOOP 4 and a 5.0/MG, you couldn't switch between them — the strap picker on the Live screen disappeared after your first pairing and never came back. It now stays available whenever you're not actively streaming, and choosing the other model cleanly drops the old strap so the new one connects fresh. Pick your strap, hit Scan & Connect, done.",
+            ]),
         Release(
             version: "1.23",
             title: "WHOOP 5.0 history decoding comes to Android",

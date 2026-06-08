@@ -126,9 +126,10 @@ fun LiveScreen(viewModel: AppViewModel) {
             )
         }
 
-        // Strap picker — choose the model before scanning so we look for exactly one
-        // device family. Hidden once bonded; by then we know what's on the wrist.
-        if (!live.bonded) {
+        // Strap picker — choose the model before scanning so we look for exactly one device family.
+        // Shown whenever we're not actively streaming, so a user with both a WHOOP 4 and a 5/MG can
+        // switch between them (it used to hide once `bonded`, which stuck after the first pairing).
+        if (!(live.connected && live.bonded)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Metrics.gap),

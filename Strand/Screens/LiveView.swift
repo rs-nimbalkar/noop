@@ -26,7 +26,10 @@ struct LiveView: View {
                 connectionRow
                 heartRateCard
                 statusGrid
-                if !live.bonded { modelPicker }
+                // Show the strap picker whenever we're not actively streaming, so a user with both a
+                // WHOOP 4 and a 5/MG can switch between them. (It used to hide once `bonded`, which is
+                // sticky across disconnects — so after the first pairing the picker vanished for good.)
+                if !activeConnection { modelPicker }
                 controls
                 logCard
             }
@@ -107,8 +110,8 @@ struct LiveView: View {
 
     // MARK: - Strap picker
 
-    /// Pick the strap family before scanning. Hidden once bonded — by then we know
-    /// what's on the wrist.
+    /// Pick the strap family to scan for. Switching the selection drops the current strap's bond so the
+    /// newly-picked one connects fresh — letting a user move between a WHOOP 4 and a 5/MG.
     private var modelPicker: some View {
         HStack(spacing: 10) {
             Text("Strap").font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
@@ -116,7 +119,13 @@ struct LiveView: View {
                 WhoopModel.allCases,
                 selection: Binding(
                     get: { selectedModel },
-                    set: { selectedModelRaw = $0.rawValue }
+                    set: { newModel in
+                        guard newModel.rawValue != selectedModelRaw else { return }
+                        selectedModelRaw = newModel.rawValue
+                        // Clear the previous strap's sticky bond/connection so the next scan targets the
+                        // new family's service and bonds it fresh.
+                        model.prepareStrapSwitch()
+                    }
                 ),
                 label: { $0.displayName }
             )
