@@ -32,6 +32,14 @@ public struct WhoopExportImporter {
         return dayStrain * dayStrainToEffortScale
     }
 
+    /// Inverse: convert NOOP's internal 0–100 Effort back onto WHOOP's 0–21 Day Strain scale for a
+    /// WHOOP-format CSV export. Keeps the CSV genuinely WHOOP-compatible AND makes a NOOP export →
+    /// NOOP import round-trip lossless (export ÷scale, then import ×scale restores the value).
+    public static func whoopDayStrainFromEffort(_ effort: Double?) -> Double? {
+        guard let effort else { return nil }
+        return effort / dayStrainToEffortScale
+    }
+
     // Recognised CSV filenames (lowercased).
     private static let cyclesName  = "physiological_cycles.csv"
     private static let sleepsName  = "sleeps.csv"
@@ -302,9 +310,9 @@ public struct WhoopExportImporter {
             if r.workoutStart == nil && r.workoutEnd == nil && r.cycleStart == nil { continue }
 
             r.activityName   = row.cell("activity_name")
-            // Workout strain is also WHOOP's 0–21 scale → rescale onto NOOP's 0–100 Effort axis so
-            // imported workouts match detected/manual ones (which StrainScorer now scores 0–100).
-            r.activityStrain = Self.effortFromImportedDayStrain(row.double("activity_strain"))
+            // Parsed VERBATIM (WHOOP's 0–21 scale) to preserve the CSV round-trip contract; the
+            // 0–21→0–100 Effort rescale is applied at the store-write (WhoopImporter), like day_strain.
+            r.activityStrain = row.double("activity_strain")
             r.energyKcal     = row.double("energy_burned_cal")  // CSV "(cal)" == kcal
             r.avgHeartRate   = row.double("average_hr_bpm", "average_heart_rate_bpm")
             r.maxHeartRate   = row.double("max_hr_bpm", "max_heart_rate_bpm")

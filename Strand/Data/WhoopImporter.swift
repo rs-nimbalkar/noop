@@ -25,7 +25,8 @@ enum WhoopImporter {
                 restingHr: c.restingHeartRate.map { Int($0.rounded()) },
                 avgHrv: c.hrvMs,
                 recovery: c.recoveryScore,
-                strain: c.dayStrain,
+                // WHOOP Day Strain (0–21) → NOOP's 0–100 Effort axis at the store boundary.
+                strain: WhoopExportImporter.effortFromImportedDayStrain(c.dayStrain),
                 exerciseCount: nil,
                 spo2Pct: c.bloodOxygenPct,
                 skinTempDevC: c.skinTempCelsius,   // NOTE: Whoop export gives absolute °C, not a baseline deviation
@@ -62,7 +63,7 @@ enum WhoopImporter {
         for c in result.cycles {
             guard let start = c.cycleStart else { continue }
             let day = dayString(start, tzOffsetMin: c.tzOffsetMin)
-            add(day, "recovery", c.recoveryScore);        add(day, "strain", c.dayStrain)
+            add(day, "recovery", c.recoveryScore);        add(day, "strain", WhoopExportImporter.effortFromImportedDayStrain(c.dayStrain))
             add(day, "rhr", c.restingHeartRate);          add(day, "hrv", c.hrvMs)
             add(day, "spo2", c.bloodOxygenPct);           add(day, "skin_temp", c.skinTempCelsius)
             add(day, "resp_rate", c.respiratoryRate);     add(day, "energy_kcal", c.energyKcal)
@@ -143,7 +144,7 @@ enum WhoopImporter {
                               durationS: e.timeIntervalSince(s), energyKcal: w.energyKcal,
                               avgHr: w.avgHeartRate.map { Int($0.rounded()) },
                               maxHr: w.maxHeartRate.map { Int($0.rounded()) },
-                              strain: w.activityStrain, distanceM: w.distanceMeters,
+                              strain: WhoopExportImporter.effortFromImportedDayStrain(w.activityStrain), distanceM: w.distanceMeters,
                               zonesJSON: zjson, notes: nil)
         }
         try await store.upsertWorkouts(workouts, deviceId: deviceId)

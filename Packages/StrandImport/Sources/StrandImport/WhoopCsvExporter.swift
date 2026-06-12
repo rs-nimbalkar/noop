@@ -150,7 +150,9 @@ public enum WhoopCsvExporter {
             let cols: [String] = [
                 d.day + " 00:00:00", "", "UTC+00:00",
                 num(d.recovery), num(d.restingHr), num(d.avgHrv), num(d.skinTempDevC), num(d.spo2Pct),
-                num(d.strain), num(s["energy_kcal"]), num(s["max_hr"]), num(s["avg_hr"]),
+                // Day Strain column is WHOOP's 0–21 scale → convert our 0–100 Effort down so the CSV is
+                // WHOOP-format and a NOOP→NOOP round-trip is lossless (importer scales it back up).
+                num(WhoopExportImporter.whoopDayStrainFromEffort(d.strain)), num(s["energy_kcal"]), num(s["max_hr"]), num(s["avg_hr"]),
                 "", "",                              // sleep/wake onset live in sleeps.csv, not here
                 num(s["sleep_performance"]), num(d.respRateBpm), num(d.totalSleepMin), num(s["in_bed_min"]),
                 num(d.lightMin), num(d.deepMin), num(d.remMin),
@@ -205,7 +207,7 @@ public enum WhoopCsvExporter {
             let zones = zonePercents(w.zonesJSON)
             let cols: [String] = [
                 utc(w.startTs), utc(w.startTs), utc(w.endTs), "UTC+00:00",
-                field(w.sport), num(w.strain), num(w.energyKcal), num(w.maxHr), num(w.avgHr),
+                field(w.sport), num(WhoopExportImporter.whoopDayStrainFromEffort(w.strain)), num(w.energyKcal), num(w.maxHr), num(w.avgHr),
                 num(zones?[0]), num(zones?[1]), num(zones?[2]), num(zones?[3]), num(zones?[4]),
                 num(w.distanceM),
                 field(sourceLabel(w)),

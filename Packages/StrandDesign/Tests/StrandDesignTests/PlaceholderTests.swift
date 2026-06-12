@@ -56,11 +56,11 @@ final class StrandDesignTests: XCTestCase {
     }
 
     func testStrainColorScaleAndEndpoints() {
-        // Strain samples the 0...21 ramp; endpoints match ember/magenta.
+        // Effort samples the 0...100 ramp; endpoints match ember/magenta.
         let ember = StrandPalette.strainColor(0).rgbaComponents
         let start = StrandPalette.strain000.rgbaComponents
         XCTAssertEqual(ember.r, start.r, accuracy: 0.02)
-        let magenta = StrandPalette.strainColor(21).rgbaComponents
+        let magenta = StrandPalette.strainColor(100).rgbaComponents
         let end = StrandPalette.strain100.rgbaComponents
         XCTAssertEqual(magenta.b, end.b, accuracy: 0.02)
     }

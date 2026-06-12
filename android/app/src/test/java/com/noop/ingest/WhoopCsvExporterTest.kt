@@ -48,7 +48,8 @@ class WhoopCsvExporterTest {
         assertEquals("68.4", row["heart_rate_variability_ms"])
         assertEquals("33.1", row["skin_temp_celsius"])
         assertEquals("96", row["blood_oxygen_pct"])
-        assertEquals("12.5", row["day_strain"])
+        // CSV is WHOOP 0–21 scale: 12.5 Effort × 21/100 = 2.625 (re-import scales back up).
+        assertEquals("2.625", row["day_strain"])
         assertEquals("14.2", row["respiratory_rate_rpm"])
         assertEquals("420", row["asleep_duration_min"])
         assertEquals("210", row["light_sleep_duration_min"])
@@ -83,7 +84,8 @@ class WhoopCsvExporterTest {
         val row = table.rows[0]
         // The quoted activity name with comma/quote/newline must survive RFC-4180 round-trip.
         assertEquals("Run, \"tempo\"\nintervals", row["activity_name"])
-        assertEquals("11.2", row["activity_strain"])
+        // CSV is WHOOP 0–21 scale: 11.2 Effort × 21/100 = 2.352.
+        assertEquals("2.352", row["activity_strain"])
         assertEquals("540", row["energy_burned_cal"])
         assertEquals("158", row["average_hr_bpm"])
         assertEquals("182", row["max_hr_bpm"])

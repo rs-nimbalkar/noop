@@ -17,6 +17,13 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 2.6.1 — Effort scale fix for imported data
+
+- **Fixed:** imported WHOOP **Day Strain** and **workout strain** now correctly land on NOOP's 0–100
+  **Effort** axis (the 0–21 → 0–100 rescale was defined in v2.6.0 but never wired up), so imported and
+  on-device Effort finally share one scale. NOOP's own CSV export now writes Effort on WHOOP's 0–21 scale,
+  so re-importing your own export round-trips losslessly.
+
 ## 2.6.0 — Charge, Effort & Rest: NOOP's own scores, out of 100
 
 - **New (Mac, iOS and Android):** NOOP now has its **own daily scores, all out of 100** — **Charge** (how
