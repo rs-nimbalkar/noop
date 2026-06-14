@@ -16,6 +16,14 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/NoopApp/noop/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/NoopApp/noop?style=flat-square&label=latest&color=18C98B"></a>
+  <a href="https://github.com/NoopApp/noop/releases"><img alt="Total downloads" src="https://img.shields.io/github/downloads/NoopApp/noop/total?style=flat-square&label=downloads&color=2FE6A8"></a>
+  <a href="https://github.com/NoopApp/noop/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/NoopApp/noop?style=flat-square&color=18C98B"></a>
+  <a href="https://github.com/NoopApp/noop/issues?q=is%3Aissue+is%3Aclosed"><img alt="Issues resolved" src="https://img.shields.io/github/issues-closed/NoopApp/noop?style=flat-square&label=resolved&color=2FE6A8"></a>
+  <a href="https://github.com/NoopApp/noop/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/NoopApp/noop?style=flat-square&label=last%20commit&color=8B9690"></a>
+</p>
+
+<p align="center">
   <a href="#keeping-noop-alive">♥&nbsp;Support</a> ·
   <a href="#download">⬇&nbsp;Download</a> ·
   <a href="https://www.reddit.com/r/NOOPApp/">💬&nbsp;Community</a> ·
@@ -60,6 +68,13 @@ Each address also has a scan-to-donate **QR code** in the app under **Support** 
 ## Download
 
 Pre-built apps you can run right now:
+
+<p>
+  <a href="https://github.com/NoopApp/noop/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/NoopApp/noop?style=flat-square&label=version&color=18C98B"></a>
+  <img alt="Total downloads" src="https://img.shields.io/github/downloads/NoopApp/noop/total?style=flat-square&label=total%20downloads&color=2FE6A8">
+  <img alt="Downloads of this release" src="https://img.shields.io/github/downloads/NoopApp/noop/latest/total?style=flat-square&label=this%20release&color=2FE6A8">
+  <img alt="Released" src="https://img.shields.io/github/release-date/NoopApp/noop?style=flat-square&label=released&color=8B9690">
+</p>
 
 | Platform | Build | Notes |
 |---|---|---|
@@ -225,11 +240,18 @@ storage, analytics, and scoring is ported to Kotlin on Android. Both apps pair
 with the strap and **score recovery, strain and sleep on your own device** — no
 import required.
 
+<p>
+  <a href="https://github.com/NoopApp/noop/releases/latest"><img alt="Latest across all platforms" src="https://img.shields.io/github/v/release/NoopApp/noop?style=flat-square&label=all%20platforms&color=18C98B"></a>
+  <img alt="Commits per month" src="https://img.shields.io/github/commit-activity/m/NoopApp/noop?style=flat-square&label=commits%2Fmo&color=2FE6A8">
+  <img alt="Top language" src="https://img.shields.io/github/languages/top/NoopApp/noop?style=flat-square&color=18C98B">
+  <img alt="Code size" src="https://img.shields.io/github/languages/code-size/NoopApp/noop?style=flat-square&label=code&color=8B9690">
+</p>
+
 | Platform | Status |
 |---|---|
 | **macOS** | ✅ Full app (`Strand/`, SwiftUI, macOS 13+). Pairs over BLE, offloads the strap's history, and scores recovery / strain / sleep on-device. The complete feature set above runs here. |
 | **Android** | ✅ Full app (`android/`, Jetpack Compose, Android 8+). Pairs over BLE, persists and scores on-device, and imports WHOOP / Apple Health / Health Connect. Grab the APK from [Releases](../../releases). |
-| **iOS** | 📲 **Direct download** (v1.96): an unsigned `.ipa` you sideload with AltStore/SideStore — it signs on your iPhone with your *own* free Apple ID, so there's an anonymous install path with no App Store / developer account (see [docs/IOS.md](docs/IOS.md)). Also still builds from source in Xcode. Shares the cross-platform Swift packages, so scoring matches macOS. Newer and less battle-tested than macOS/Android — live BLE on a real iPhone is still being validated; Apple Health + Live Activity widgets can be limited under a free signing identity. |
+| **iOS** | 📲 **Direct download**: an unsigned `.ipa` you sideload with AltStore/SideStore — it signs on your iPhone with your *own* free Apple ID, so there's an anonymous install path with no App Store / developer account (see [docs/IOS.md](docs/IOS.md)). Also still builds from source in Xcode. Shares the cross-platform Swift packages, so scoring matches macOS. Newer and less battle-tested than macOS/Android — live BLE on a real iPhone is still being validated; Apple Health + Live Activity widgets can be limited under a free signing identity. |
 
 ### Strap support
 
@@ -527,4 +549,19 @@ A live snapshot of the last 30 days — issues, pull requests, pushes, and the p
 forward. Huge thanks to everyone filing reports, sharing strap logs, and reverse-engineering the
 protocol alongside us — this project is built on it.
 
+<p>
+  <img alt="Open issues" src="https://img.shields.io/github/issues/NoopApp/noop?style=flat-square&label=open&color=18C98B">
+  <img alt="Issues resolved" src="https://img.shields.io/github/issues-closed/NoopApp/noop?style=flat-square&label=resolved&color=2FE6A8">
+  <a href="https://github.com/NoopApp/noop/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/NoopApp/noop?style=flat-square&color=18C98B"></a>
+  <img alt="Forks" src="https://img.shields.io/github/forks/NoopApp/noop?style=flat-square&color=8B9690">
+  <img alt="Commits per month" src="https://img.shields.io/github/commit-activity/m/NoopApp/noop?style=flat-square&label=commits%2Fmo&color=2FE6A8">
+  <img alt="Last commit" src="https://img.shields.io/github/last-commit/NoopApp/noop?style=flat-square&label=last%20commit&color=8B9690">
+</p>
+
 ![Repobeats analytics image](https://repobeats.axiom.co/api/embed/97acba228c083adca8453a1ebf15f18dad2894be.svg "Repobeats analytics image")
+
+### Star history
+
+If NOOP's useful to you, a ⭐ genuinely helps it reach more WHOOP users — and it's the single best free way to support the project.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=NoopApp/noop&type=Date)](https://star-history.com/#NoopApp/noop&Date)
