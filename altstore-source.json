@@ -18,6 +18,15 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.18.5",
+          "buildVersion": "74",
+          "date": "2026-06-14",
+          "localizedDescription": "Today tile value truncation fix (Android)",
+          "downloadURL": "https://github.com/NoopApp/noop/releases/download/v2.18.5/NOOP-v2.18.5-ios.ipa",
+          "size": 6601023,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "2.18.4",
           "buildVersion": "73",
           "date": "2026-06-14",
@@ -388,12 +397,12 @@
           "NSHealthUpdateUsageDescription": "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         }
       },
-      "version": "2.18.4",
-      "buildVersion": "73",
+      "version": "2.18.5",
+      "buildVersion": "74",
       "versionDate": "2026-06-14",
-      "versionDescription": "Dynamic Island toggle fix",
-      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v2.18.4/NOOP-v2.18.4-ios.ipa",
-      "size": 6601262,
+      "versionDescription": "Today tile value truncation fix (Android)",
+      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v2.18.5/NOOP-v2.18.5-ios.ipa",
+      "size": 6601023,
       "minOSVersion": "17.0"
     }
   ],
