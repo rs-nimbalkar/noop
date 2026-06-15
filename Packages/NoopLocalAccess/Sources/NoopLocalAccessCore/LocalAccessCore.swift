@@ -130,6 +130,10 @@ public struct SleepSessionRow: Equatable, Sendable {
     public let restingHr: Int?
     public let avgHrv: Double?
     public let stagesJSON: String?
+    // NOTE (#318): this local-access read intentionally does NOT surface the user's `startTsAdjusted`
+    // onset correction — its SELECT must stay readable against pre-v14 / foreign sleepSession tables
+    // (see the `tableNames` guard), so adding the column would regress those. The MCP read therefore
+    // reports the DETECTED onset for a hand-edited night; the app's own screens use the corrected one.
 }
 
 public struct MetricPointRow: Equatable, Sendable {

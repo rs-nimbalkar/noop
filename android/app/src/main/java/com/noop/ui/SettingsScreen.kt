@@ -238,7 +238,7 @@ fun SettingsScreen(vm: AppViewModel) {
 
     // SAF launchers — CreateDocument for export, OpenDocument for import.
     val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/octet-stream"),
+        ActivityResultContracts.CreateDocument("application/zip"),
     ) { uri ->
         if (uri == null) { backupBusy = false; return@rememberLauncherForActivityResult }
         scope.launch {
@@ -903,7 +903,7 @@ fun SettingsScreen(vm: AppViewModel) {
                     Button(
                         onClick = {
                             backupBusy = true
-                            exportLauncher.launch("noop-backup.noopdb")
+                            exportLauncher.launch("noop-backup-${java.time.LocalDate.now()}.noopbak")
                         },
                         enabled = !backupBusy,
                         colors = ButtonDefaults.buttonColors(
@@ -943,7 +943,7 @@ fun SettingsScreen(vm: AppViewModel) {
                     icon = Icons.Filled.Info,
                     iconTint = Palette.textTertiary,
                     text = "Importing overwrites everything currently on this phone. Your old data is kept in a side file just in case. NOOP needs a relaunch for an import to take effect. " +
-                        "Export CSV writes a WHOOP-format zip of your days, sleeps, workouts and journal that re-imports into NOOP on Android or Mac — on-device computed rows are marked APPROXIMATE in its Source column; the .noopdb backup stays the lossless restore path.",
+                        "Export CSV writes a WHOOP-format zip of your days, sleeps, workouts and journal that re-imports into NOOP on Android or Mac — on-device computed rows are marked APPROXIMATE in its Source column; the .noopbak backup stays the lossless restore path.",
                 )
             }
         }

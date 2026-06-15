@@ -200,6 +200,54 @@ final class AnalyticsEngineTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(result.daily.skinTempDevC), 0.2)
     }
 
+    /// End-to-end for the wake-time-edit feature (#318): the REAL stager detects a night and assigns it
+    /// a startTs; a hand-correction keyed by THAT startTs must flow through `dailyAggregateHonoringEdits`
+    /// and lower the day's total sleep. Proves the edit's key actually lines up with genuine stager
+    /// output — the one thing the isolated seam tests can't, since they hand-pick startTs.
+    func testEditOnRealDetectedSleepLowersTheDailyAggregate() throws {
+        let day = "2026-06-15"
+        let n = night(endDay: day, hours: 8)
+        let result = AnalyticsEngine.analyzeDay(
+            day: day, hr: n.hr, rr: n.rr, gravity: n.gravity, profile: UserProfile(age: 30))
+        XCTAssertEqual(result.cachedSleep.count, 1, "the synthetic still-night must detect one sleep")
+        let detected = try XCTUnwrap(result.cachedSleep.first)
+        let detectedTotal = try XCTUnwrap(result.daily.totalSleepMin)
+
+        // Hand-correct THAT detected session's wake to its midpoint, reshaping the real segment stages
+        // exactly as the app's edit path does.
+        let newEnd = detected.startTs + (detected.endTs - detected.startTs) / 2
+        let reshaped = SleepWindowReclip.reclip(stagesJSON: detected.stagesJSON,
+                                                sessionStart: detected.startTs,
+                                                oldEnd: detected.endTs, newEnd: newEnd)
+        XCTAssertNotNil(reshaped, "the detected segment stages must reshape to the new window")
+
+        // The override — keyed by the stager's OWN detected startTs — must fire and roughly halve sleep.
+        let r = try XCTUnwrap(SleepStageTotals.dailyAggregateHonoringEdits(
+            detected: result.cachedSleep.map { (startTs: $0.startTs, stagesJSON: $0.stagesJSON) },
+            edited: [detected.startTs: reshaped]))
+        XCTAssertTrue(r.editApplied, "the edit's startTs must line up with the stager's detected startTs")
+        XCTAssertLessThan(r.sleep.totalSleepMin, detectedTotal * 0.7,
+                          "honoring a wake moved to the midpoint must clearly lower total sleep")
+    }
+
+    /// The fix for the "awake block on extend" bug (#318): re-staging a window from raw data with the
+    /// public `stageSession` yields REAL per-epoch stages tiling the window — not one fabricated "wake"
+    /// block the reshape produced. This is the WHOOP-parity path the edit uses when a night has raw data.
+    func testStageSessionReDerivesRealStagesAndEncodes() throws {
+        let day = "2026-06-16"
+        let n = night(endDay: day, hours: 6)   // a still night with real synthetic hr+gravity
+        let segs = SleepStager.stageSession(start: n.start, end: n.end,
+                                            grav: n.gravity, hr: n.hr, rr: n.rr, resp: [])
+        XCTAssertFalse(segs.isEmpty)
+        XCTAssertTrue(segs.contains { $0.stage != "wake" },
+                      "re-staging must recover real sleep stages, not an all-awake block")
+        XCTAssertEqual(segs.first?.start, n.start, "segments tile from the window start")
+        XCTAssertEqual(segs.last?.end, n.end, "…to the window end")
+        // Encodes to the stored segment-array shape and decodes back to the same stage minutes.
+        let json = try XCTUnwrap(AnalyticsEngine.encodeStages(segs))
+        XCTAssertNotNil(SleepStageTotals.minutes(fromStagesJSON: json))
+    }
+
     func testAnalyzeDayWithoutNewStreamsLeavesParityFieldsNil() {
         // Pure-function contract: callers that don't supply steps/skinTemp (all pre-existing
         // call sites and tests) get nil steps + nil skinTempDevC — never a fabricated value.

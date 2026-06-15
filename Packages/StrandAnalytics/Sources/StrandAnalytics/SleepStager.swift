@@ -554,8 +554,12 @@ public enum SleepStager {
     }
 
     /// Build a 30 s hypnogram for [start, end] and return StageSegments.
-    static func stageSession(start: Int, end: Int, grav: [GravitySample],
-                             hr: [HRSample], rr: [RRInterval], resp: [RespSample]) -> [StageSegment] {
+    /// Stage a FORCED window from raw streams (no boundary detection): the same per-epoch classifier
+    /// the detection path uses, run over exactly `[start, end]`. The sleep-edit path calls this to
+    /// re-derive real stages for a hand-corrected window — so extending a boundary recovers genuine
+    /// stages from the sensor data instead of a fabricated "awake" block. (#318)
+    public static func stageSession(start: Int, end: Int, grav: [GravitySample],
+                                    hr: [HRSample], rr: [RRInterval], resp: [RespSample]) -> [StageSegment] {
         let gSeg = rowsBetween(grav, start: start, end: end) { $0.ts }
         if gSeg.count < 2 { return [StageSegment(start: start, end: end, stage: "light")] }
 

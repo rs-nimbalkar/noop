@@ -16,7 +16,7 @@ final class MetricsCacheTests: XCTestCase {
     }
 
     func testSchemaVersionBumped() {
-        XCTAssertEqual(WhoopStoreInfo.schemaVersion, 12)
+        XCTAssertEqual(WhoopStoreInfo.schemaVersion, 14)
     }
 
     // MARK: - sleep sessions
@@ -51,6 +51,148 @@ final class MetricsCacheTests: XCTestCase {
         ], deviceId: "devA")
         let rows = try await store.sleepSessions(deviceId: "devA", from: 400, to: 1000, limit: 100)
         XCTAssertEqual(rows.map { $0.startTs }, [500])
+    }
+
+    // MARK: - v13 user-edited sleep bounds (#367 parity: edits survive re-sync)
+
+    func testV13UserEditedColumnPresent() async throws {
+        let store = try await WhoopStore.inMemory()
+        let cols = try await store.columnNamesForTest(table: "sleepSession")
+        XCTAssertTrue(cols.contains("userEdited"), "sleepSession missing v13 userEdited column")
+    }
+
+    func testUserEditedDefaultsFalseAndRoundTrips() async throws {
+        let store = try await WhoopStore.inMemory()
+        // A recompute/import session never sets the flag → defaults false.
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.9,
+                                restingHr: 52, avgHrv: 60, stagesJSON: nil)],
+            deviceId: "devA")
+        let rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 100)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertFalse(rows[0].userEdited)
+    }
+
+    func testSetSleepWakeTimeUpdatesEndTsAndMarksEdited() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.9,
+                                restingHr: 52, avgHrv: 60, stagesJSON: nil)],
+            deviceId: "devA")
+
+        let changed = try await store.applySleepEdit(deviceId: "devA", detectedStartTs: 1000, newStartTs: 1000, newEndTs: 4200)
+        XCTAssertEqual(changed, 1)
+
+        let rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 100)
+        XCTAssertEqual(rows.count, 1, "editing must not create a duplicate row")
+        XCTAssertEqual(rows[0].endTs, 4200, "corrected wake time persisted")
+        XCTAssertTrue(rows[0].userEdited, "session is now flagged user-edited")
+    }
+
+    func testSetSleepWakeTimeNoopWhenSessionMissing() async throws {
+        let store = try await WhoopStore.inMemory()
+        let changed = try await store.applySleepEdit(deviceId: "devA", detectedStartTs: 9999, newStartTs: 9999, newEndTs: 4200)
+        XCTAssertEqual(changed, 0, "no matching session → no rows changed")
+    }
+
+    func testSetSleepWakeTimeReplacesStagesWhenProvidedAndKeepsThemWhenNil() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.9,
+                                restingHr: 52, avgHrv: 60, stagesJSON: "[\"old\"]")],
+            deviceId: "devA")
+
+        // Non-nil stagesJSON reshapes the stored breakdown to the edited window.
+        try await store.applySleepEdit(deviceId: "devA", detectedStartTs: 1000, newStartTs: 1000,
+                                       newEndTs: 4200, stagesJSON: "[\"reclipped\"]")
+        var rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 100)
+        XCTAssertEqual(rows[0].endTs, 4200)
+        XCTAssertEqual(rows[0].stagesJSON, "[\"reclipped\"]")
+        XCTAssertTrue(rows[0].userEdited)
+
+        // A nil stagesJSON (nothing reclippable) keeps whatever stages are already stored.
+        try await store.applySleepEdit(deviceId: "devA", detectedStartTs: 1000, newStartTs: 1000, newEndTs: 4000, stagesJSON: nil)
+        rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 100)
+        XCTAssertEqual(rows[0].endTs, 4000)
+        XCTAssertEqual(rows[0].stagesJSON, "[\"reclipped\"]", "nil stagesJSON preserves existing stages")
+    }
+
+    func testApplySleepEditStoresAdjustedOnsetAndSurvivesRecompute() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.9,
+                                restingHr: 52, avgHrv: 60, stagesJSON: "[\"orig\"]")],
+            deviceId: "devA")
+        // Correct BOTH onset (1000 → 1300) and wake (5000 → 4200). The detected key stays 1000.
+        try await store.applySleepEdit(deviceId: "devA", detectedStartTs: 1000, newStartTs: 1300,
+                                       newEndTs: 4200, stagesJSON: "[\"restaged\"]")
+        var rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 100)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].startTs, 1000, "detected onset key is unchanged")
+        XCTAssertEqual(rows[0].startTsAdjusted, 1300, "corrected onset stored")
+        XCTAssertEqual(rows[0].effectiveStartTs, 1300)
+        XCTAssertEqual(rows[0].endTs, 4200)
+        XCTAssertTrue(rows[0].userEdited)
+
+        // A re-sync recompute (userEdited=false, startTsAdjusted nil incoming) must preserve the onset edit.
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.95,
+                                restingHr: 49, avgHrv: 71, stagesJSON: "[\"resync\"]")],
+            deviceId: "devA")
+        rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 100)
+        XCTAssertEqual(rows[0].startTsAdjusted, 1300, "onset edit survives re-sync")
+        XCTAssertEqual(rows[0].endTs, 4200, "wake edit survives re-sync")
+        XCTAssertEqual(rows[0].stagesJSON, "[\"restaged\"]")
+        XCTAssertEqual(rows[0].efficiency, 0.95, "vitals still refresh")
+    }
+
+    /// The crux of the feature: once a user has corrected a night's wake time, the next strap sync's
+    /// recompute (which re-upserts the strap-detected session over the same natural key with
+    /// `userEdited == false`) must NOT revert the corrected `endTs` or clear the flag — but it MAY still
+    /// refresh the derived vitals (efficiency / restingHr / avgHrv).
+    func testRecomputeUpsertPreservesUserEditedBounds() async throws {
+        let store = try await WhoopStore.inMemory()
+        // Strap-detected session, then the user corrects the wake time 800s earlier.
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.90,
+                                restingHr: 52, avgHrv: 60, stagesJSON: "[\"orig\"]")],
+            deviceId: "devA")
+        try await store.applySleepEdit(deviceId: "devA", detectedStartTs: 1000, newStartTs: 1000, newEndTs: 4200)
+
+        // Simulate the next sync re-running the stager: same (deviceId, startTs), strap's ORIGINAL
+        // endTs back again, fresh vitals, userEdited defaulting false.
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.95,
+                                restingHr: 49, avgHrv: 71, stagesJSON: "[\"resync\"]")],
+            deviceId: "devA")
+
+        let rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 100)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].endTs, 4200, "user-corrected wake time survives the re-sync")
+        XCTAssertTrue(rows[0].userEdited, "the edit flag is not cleared by a recompute upsert")
+        XCTAssertEqual(rows[0].stagesJSON, "[\"orig\"]", "edited session keeps its stage breakdown")
+        // Derived vitals are still allowed to refresh from the denser post-sync data.
+        XCTAssertEqual(rows[0].efficiency, 0.95)
+        XCTAssertEqual(rows[0].restingHr, 49)
+        XCTAssertEqual(rows[0].avgHrv, 71)
+    }
+
+    func testRecomputeUpsertStillOverwritesUnEditedSession() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.90,
+                                restingHr: 52, avgHrv: 60, stagesJSON: "[\"orig\"]")],
+            deviceId: "devA")
+        // No user edit → a re-upsert behaves exactly as before (strap value wins).
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 6000, efficiency: 0.95,
+                                restingHr: 49, avgHrv: 71, stagesJSON: "[\"resync\"]")],
+            deviceId: "devA")
+        let rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 100)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].endTs, 6000)
+        XCTAssertEqual(rows[0].stagesJSON, "[\"resync\"]")
+        XCTAssertFalse(rows[0].userEdited)
     }
 
     // MARK: - daily metrics

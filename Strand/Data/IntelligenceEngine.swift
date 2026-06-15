@@ -223,15 +223,27 @@ final class IntelligenceEngine: ObservableObject {
         // Rest composite (0–100) per computed night, persisted as the `sleep_performance` metric
         // series so the dashboard's Rest score reflects the new composite, not raw efficiency.
         var restPoints: [MetricPoint] = []
+        // User-corrected sleep windows override the detected sleep when scoring a day's sleep aggregates,
+        // so Rest + recovery honor the edit — not just the Sleep tab's session view. An edited block
+        // substitutes its detected twin (matched by the stable detected startTs) before totals recompute.
+        // Scope (#318): this only covers the COMPUTED ("-noop") source — the days noop scores itself. An
+        // edit to an IMPORTED (WHOOP-export) night updates the displayed session, but its dashboard
+        // recovery/performance come verbatim from the export and are NOT recomputed here (we don't
+        // reproduce WHOOP's cloud scoring). That's an accepted limitation, documented on the PR.
+        let editedRows = ((try? await store.sleepSessions(deviceId: computedId, from: windowStart,
+                                                          to: now, limit: 100_000)) ?? [])
+            .filter { $0.userEdited }
+        let editsByStart = Dictionary(editedRows.map { ($0.startTs, $0) }, uniquingKeysWith: { a, _ in a })
         for night in scoredNights {
-            let recovery = recomputeRecovery(night.daily, baselines2)
+            let daily = sleepEditedDaily(night.daily, detected: night.cachedSleep, editsByStart: editsByStart)
+            let recovery = recomputeRecovery(daily, baselines2)
             let skinDev = recomputeSkinTempDev(night.nightlySkin, baselines2.skinTemp)
-            out.append(Computed(day: night.daily.day, recovery: recovery, strain: night.strain,
-                                sleepMin: night.daily.totalSleepMin, hrv: night.daily.avgHrv,
-                                rhr: night.daily.restingHr))
-            dailies.append(night.daily.with(recovery: recovery, skinTempDevC: skinDev))
-            if let rest = AnalyticsEngine.Rest.composite(daily: night.daily) {
-                restPoints.append(MetricPoint(day: night.daily.day, key: "sleep_performance", value: rest))
+            out.append(Computed(day: daily.day, recovery: recovery, strain: night.strain,
+                                sleepMin: daily.totalSleepMin, hrv: daily.avgHrv,
+                                rhr: daily.restingHr))
+            dailies.append(daily.with(recovery: recovery, skinTempDevC: skinDev))
+            if let rest = AnalyticsEngine.Rest.composite(daily: daily) {
+                restPoints.append(MetricPoint(day: daily.day, key: "sleep_performance", value: rest))
             }
             cachedSleep.append(contentsOf: night.cachedSleep)
             // Persist the detected workouts the pipeline already computes (previously discarded).
@@ -267,7 +279,18 @@ final class IntelligenceEngine: ObservableObject {
         // always wins; this only fills the days the strap collected but no import covered.
         if !dailies.isEmpty { _ = try? await store.upsertDailyMetrics(dailies, deviceId: computedId) }
         if !restPoints.isEmpty { _ = try? await store.upsertMetricSeries(restPoints, deviceId: computedId) }
-        if !cachedSleep.isEmpty { _ = try? await store.upsertSleepSessions(cachedSleep, deviceId: computedId) }
+        // Drop any freshly-detected session that overlaps a night the user has already hand-corrected.
+        // A detected onset can drift second-to-second as more raw data arrives, so without this the
+        // re-detected night would upsert as a SECOND row beside the edited one (different startTs ⇒ no
+        // ON CONFLICT match), and mergeDay would DOUBLE-COUNT both into an inflated time-in-bed. The
+        // edited row is already stored (preserved by the upsert guard), so we simply don't re-insert its
+        // detected twin. Sleep has no delete-reinsert pass (unlike dailyMetric/workout), so this is the
+        // idempotency guard for the edited case. (#318)
+        let editedWindows = editedRows.map { (start: $0.effectiveStartTs, end: $0.endTs) }
+        let cachedSleepKept = cachedSleep.filter { s in
+            !editedWindows.contains { s.startTs < $0.end && $0.start < s.endTs }   // time-overlap test
+        }
+        if !cachedSleepKept.isEmpty { _ = try? await store.upsertSleepSessions(cachedSleepKept, deviceId: computedId) }
         // Make re-detection idempotent across runs: clear the prior computed detected workouts in the
         // scored window (a bout's startTs can drift as more HR arrives, which would otherwise orphan
         // stale rows under the (deviceId,startTs,sport) key), then re-insert.
@@ -334,6 +357,24 @@ final class IntelligenceEngine: ObservableObject {
                                        skinTempDev: daily.skinTempDevC)
     }
 
+    /// Override a day's detected sleep aggregates with the user's hand-corrected window when one of the
+    /// night's blocks was edited. Substitutes each edited block (matched by its stable startTs) for its
+    /// detected twin and recomputes totalSleep / efficiency / stage minutes from the reshaped stages, so
+    /// the Rest composite and recovery score the corrected sleep — not the auto-detected window. No edit
+    /// touching the night → the detected daily is returned unchanged. (#318)
+    private func sleepEditedDaily(_ daily: DailyMetric, detected: [CachedSleepSession],
+                                 editsByStart: [Int: CachedSleepSession]) -> DailyMetric {
+        guard !editsByStart.isEmpty else { return daily }
+        let detectedTuples = detected.map { (startTs: $0.startTs, stagesJSON: $0.stagesJSON) }
+        let editedStages = editsByStart.mapValues { $0.stagesJSON }
+        guard let r = SleepStageTotals.dailyAggregateHonoringEdits(detected: detectedTuples,
+                                                                   edited: editedStages),
+              r.editApplied else { return daily }
+        let agg = r.sleep
+        return daily.with(totalSleepMin: agg.totalSleepMin, efficiency: agg.efficiency,
+                          deepMin: agg.deepMin, remMin: agg.remMin, lightMin: agg.lightMin)
+    }
+
     /// Re-derive the skin-temperature deviation (°C) for a night against the freshly-seeded personal
     /// baseline, mirroring the avgHrv→recovery re-score. Nil when the night had no wear-gated mean or
     /// the skin-temp baseline isn't usable yet (< minNightsSeed) — honest cold-start. Rounded to 2 dp
@@ -374,5 +415,16 @@ private extension DailyMetric {
                     avgHrv: avgHrv, recovery: r, strain: strain, exerciseCount: exerciseCount,
                     spo2Pct: spo2Pct, skinTempDevC: sd, respRateBpm: respRateBpm,
                     steps: steps, activeKcalEst: activeKcalEst)
+    }
+
+    /// Rebuild with substituted sleep-derived fields (a user-corrected wake window), leaving every
+    /// non-sleep field untouched. Used by `sleepEditedDaily` so Rest/recovery score the edited sleep. (#318)
+    func with(totalSleepMin tsm: Double?, efficiency eff: Double?,
+              deepMin dm: Double?, remMin rm: Double?, lightMin lm: Double?) -> DailyMetric {
+        DailyMetric(day: day, totalSleepMin: tsm, efficiency: eff, deepMin: dm, remMin: rm, lightMin: lm,
+                    disturbances: disturbances, restingHr: restingHr, avgHrv: avgHrv, recovery: recovery,
+                    strain: strain, exerciseCount: exerciseCount, spo2Pct: spo2Pct,
+                    skinTempDevC: skinTempDevC, respRateBpm: respRateBpm, steps: steps,
+                    activeKcalEst: activeKcalEst)
     }
 }

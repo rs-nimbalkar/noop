@@ -17,6 +17,13 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 3.5.0 — Hand-correct your sleep times + smaller backups
+
+- **Sleep bed/wake editing (iPhone/Mac, #395):** the Sleep tab gains a pencil to hand-correct a night's Asleep/Woke times. The night is **re-staged from the raw sensor data** over the corrected window (real `SleepStager` for strap nights; stage-reclip for imported ones), and the edit is **durable** — a `userEdited` flag + a recompute guard drop any re-detected session that overlaps an edited night, so a later strap sync can't revert the correction. Two additive migrations (`userEdited`, `startTsAdjusted`); `startTs` stays the immutable detected key so editing the bedtime can't spawn a duplicate row. Imported WHOOP-export nights update the displayed session but keep verbatim export recovery/performance. Thanks @claypilat.
+- **Compressed `.noopbak` backups (#396):** exports are now a single-entry deflate ZIP (`noop-backup.sqlite` inside), typically 80–90% smaller — small enough to AirDrop/email. Both platforms produce and consume the same container; import sniffs ZIP-vs-raw magic bytes so older uncompressed backups still restore, and the failed-import rollback is preserved. Thanks @ujix.
+
+---
+
 ## 3.4.0 — Tidier Today hero, strap renaming, smarter journal
 
 - **Today hero (#394):** the three daily scores — Charge / Effort / Rest — now sit in one equal three-up row of rings, instead of the old adaptive grid that fit only two per phone width and orphaned Rest beside an empty cell. Rings shrink to fit and drop the micro wordmark so the number stays legible. Thanks @vulnix0x4.

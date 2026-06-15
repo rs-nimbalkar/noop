@@ -25,7 +25,7 @@ object AppChangelog {
      * Bump this when you add a release below. The "What's New" sheet shows automatically when the
      * stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
      */
-    const val CURRENT_VERSION = "3.4.0"
+    const val CURRENT_VERSION = "3.5.0"
 
     data class Release(
         val version: String,
@@ -36,6 +36,15 @@ object AppChangelog {
 
     /** Newest first. */
     val releases: List<Release> = listOf(
+        Release(
+            version = "3.5.0",
+            title = "Hand-correct your sleep times + smaller backups",
+            date = "June 2026",
+            items = listOf(
+                "Smaller, shareable backups: exporting now produces a compressed .noopbak file — typically 80–90% smaller (a 100 MB+ backup becomes ~10–20 MB), small enough to share over email or messaging. iPhone, Mac and Android all read each other's, and older uncompressed backups still import fine. Thanks @ujix (#396).",
+                "Sleep (iPhone/Mac): you can now hand-correct a night's bed/wake times with a pencil on the Sleep tab — NOOP re-stages from the raw sensor data and the correction survives the next strap sync. (Android already has bed/wake editing; durable-edit parity is tracked.) Thanks @claypilat (#395).",
+            ),
+        ),
         Release(
             version = "3.4.0",
             title = "Tidier Today hero, strap renaming, smarter journal",

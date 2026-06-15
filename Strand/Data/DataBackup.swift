@@ -7,15 +7,19 @@ import UIKit
 import SQLite3
 import UniformTypeIdentifiers
 import WhoopStore
+import ZIPFoundation
 
 /// Full-database EXPORT / IMPORT for device migration.
 ///
 /// NOOP keeps everything in one SQLite file (`<AppSupport>/OpenWhoop/whoop.sqlite`, plus the
-/// `-wal`/`-shm` WAL sidecars while the store is open). Moving to another Mac is therefore just a
-/// matter of moving that file. Export checkpoints the WAL (so the single file is whole) and copies
-/// it to a user-chosen location; import validates a chosen backup, snapshots the current DB to a
-/// side file, drops the backup in over the live path, and asks the user to relaunch (the store is
-/// held open, so the new file can't be swapped in live).
+/// `-wal`/`-shm` WAL sidecars while the store is open). Export checkpoints the WAL (so the
+/// single file is whole), then wraps the SQLite in a single-entry ZIP written as `.noopbak`.
+/// ZIP deflate typically cuts a 100 MB+ SQLite backup to 10–20 MB. The format is a standard
+/// ZIP — users can rename `.noopbak` → `.zip` and extract the SQLite manually on any OS.
+///
+/// Import detects the format by magic bytes: ZIP (`PK\x03\x04`) or legacy plain SQLite. ZIP
+/// backups are extracted to a temp dir, validated, then swapped in exactly like a plain import.
+/// Old `.sqlite` / `.noopdb` backups keep working.
 ///
 /// Sandbox-safe: relies on the `com.apple.security.files.user-selected.read-write` entitlement and
 /// security-scoped access on the panel-returned URLs. Every path is best-effort — failures surface
@@ -38,12 +42,13 @@ enum DataBackup {
 
     // MARK: - Export
 
-    /// Checkpoint (if the store is reachable) and copy the live database to a user-chosen file.
+    /// Checkpoint the store and write the live database as a compressed `.noopbak` (single-entry
+    /// ZIP) to a user-chosen file.
     ///
     /// - Parameter checkpoint: invoked first to flush the WAL into the main file. Pass
-    ///   `repo.checkpointForBackup`; returns whether a checkpoint actually ran. When it doesn't
-    ///   (store not open yet, or it failed), we copy the on-disk files as-is — including any `-wal`
-    ///   sidecar — so the backup is still complete, just not consolidated.
+    ///   `repo.checkpointForBackup`. Must succeed — a failed checkpoint means committed pages still
+    ///   live in the WAL and would be silently absent from the ZIP; we fail loudly rather than ship
+    ///   a partial backup.
     @MainActor
     static func runExport(checkpoint: @escaping () async -> Bool) async -> BackupResult {
         let dbPath: String
@@ -55,17 +60,19 @@ enum DataBackup {
             return .failure("There's no NOOP data to export yet. Import or record some first.")
         }
 
-        // Flush the WAL so the single .sqlite carries everything. Best-effort.
-        let checkpointed = await checkpoint()
+        // Flush the WAL so the single .sqlite carries everything. Required for ZIP (no sidecar
+        // fallback in a single-file archive).
+        guard await checkpoint() else {
+            return .failure("Couldn't safely export right now — recent changes are still in the database's write-ahead log. Close any in-flight sync, then try again.")
+        }
 
         #if os(macOS)
-        // Ask where to save.
         let panel = NSSavePanel()
         panel.title = "Export NOOP backup"
         panel.prompt = "Export"
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = defaultBackupName()
-        panel.allowedContentTypes = sqliteContentTypes()
+        panel.allowedContentTypes = backupContentTypes()
         panel.isExtensionHidden = false
 
         guard panel.runModal() == .OK, let dest = panel.url else { return .cancelled }
@@ -77,33 +84,19 @@ enum DataBackup {
         do {
             // NSSavePanel already handled the "replace existing?" confirmation; clear the target.
             if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-            try fm.copyItem(at: dbURL, to: dest)
-
-            // If we couldn't checkpoint, fold any pending WAL into the side copy so the backup is
-            // self-contained. We can't run SQLite over the destination safely here, so instead we
-            // copy the sidecars next to it under the same base name; importing copies only the main
-            // file, but at least nothing is silently lost. In practice the store is almost always
-            // open and the checkpoint succeeds, leaving no WAL to worry about.
-            if !checkpointed {
-                copySidecarsIfPresent(from: dbURL, toMainBackup: dest)
-            }
+            try writeBackupZip(dbURL: dbURL, to: dest)
             return .exported(dest)
         } catch {
             return .failure("Export failed: \(error.localizedDescription)")
         }
         #else
-        // iOS: DocumentPicker.export only carries a single file, so we cannot fall back to copying
-        // the -wal/-shm sidecars the way macOS does. If the checkpoint above didn't fold the WAL
-        // into the main file, the staged copy would silently omit everything written since the last
-        // automatic checkpoint. Fail loudly instead of producing a partial backup.
-        guard checkpointed else {
-            return .failure("Couldn't safely export right now — recent changes are still in the database's write-ahead log. Close any in-flight sync, then try again.")
-        }
         let fm = FileManager.default
+
+        // Stage the compressed backup in temp, then hand it to the share sheet.
         let staged = fm.temporaryDirectory.appendingPathComponent(defaultBackupName())
         do {
             if fm.fileExists(atPath: staged.path) { try fm.removeItem(at: staged) }
-            try fm.copyItem(at: dbURL, to: staged)
+            try writeBackupZip(dbURL: dbURL, to: staged)
         } catch {
             return .failure("Export failed: \(error.localizedDescription)")
         }
@@ -112,11 +105,21 @@ enum DataBackup {
         #endif
     }
 
+    /// Write the live SQLite at `dbURL` into a fresh single-entry deflate ZIP at `dest`, under the
+    /// canonical entry name `noop-backup.sqlite`. The entry name and deflate compression match the
+    /// Android exporter byte-for-byte at the container level, so a `.noopbak` produced on either
+    /// platform imports on the other. Mirrors the `Archive` idiom in `WhoopCsvExporter`.
+    private static func writeBackupZip(dbURL: URL, to dest: URL) throws {
+        let archive = try Archive(url: dest, accessMode: .create)
+        try archive.addEntry(with: backupEntryName, fileURL: dbURL, compressionMethod: .deflate)
+    }
+
     // MARK: - Import
 
-    /// Pick a `.sqlite` backup, validate it, snapshot the current DB to a side file, then copy the
-    /// backup over the live database path (removing the `-wal`/`-shm` siblings). The store stays
-    /// open, so the swapped-in file only takes effect after a relaunch — the caller informs the user.
+    /// Pick a `.noopbak` (ZIP) or legacy `.sqlite` backup, validate it, snapshot the current DB
+    /// to a side file, then copy the backup over the live database path (removing the `-wal`/`-shm`
+    /// siblings). The store stays open, so the swapped-in file only takes effect after a relaunch —
+    /// the caller informs the user.
     @MainActor
     static func runImport() async -> BackupResult {
         let dbPath: String
@@ -130,17 +133,48 @@ enum DataBackup {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = sqliteContentTypes()
+        panel.allowedContentTypes = backupContentTypes()
 
-        guard panel.runModal() == .OK, let source = panel.url else { return .cancelled }
+        guard panel.runModal() == .OK, let pickedSource = panel.url else { return .cancelled }
 
-        let scoped = source.startAccessingSecurityScopedResource()
-        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+        let scoped = pickedSource.startAccessingSecurityScopedResource()
+        defer { if scoped { pickedSource.stopAccessingSecurityScopedResource() } }
         #else
         // iOS: pick the backup through the system document picker (asCopy gives us a readable local
         // copy in our temp dir, so no security-scoped bookkeeping is needed).
-        guard let source = await DocumentPicker.importFile(sqliteContentTypes()) else { return .cancelled }
+        guard let pickedSource = await DocumentPicker.importFile(backupContentTypes()) else { return .cancelled }
         #endif
+
+        // If the picked file is a .noopbak ZIP, extract the SQLite entry to a temp dir first.
+        // Legacy plain-SQLite files fall straight through. The extracted dir is cleaned up below.
+        let fm = FileManager.default
+        let source: URL
+        let extractedDir: URL?
+
+        if isZipFile(at: pickedSource) {
+            let tmpExtract = fm.temporaryDirectory
+                .appendingPathComponent("noop-import-\(UUID().uuidString)", isDirectory: true)
+            do {
+                if fm.fileExists(atPath: tmpExtract.path) { try fm.removeItem(at: tmpExtract) }
+                try fm.createDirectory(at: tmpExtract, withIntermediateDirectories: true)
+                try extractBackupZip(at: pickedSource, into: tmpExtract)
+            } catch {
+                try? fm.removeItem(at: tmpExtract)
+                return .failure("Couldn't open the backup archive: \(error.localizedDescription)")
+            }
+            guard let sqliteEntry = (try? fm.contentsOfDirectory(
+                at: tmpExtract, includingPropertiesForKeys: nil))?
+                .first(where: { $0.pathExtension == "sqlite" }) else {
+                try? fm.removeItem(at: tmpExtract)
+                return .failure("The backup archive doesn't contain a database file.")
+            }
+            source = sqliteEntry
+            extractedDir = tmpExtract
+        } else {
+            source = pickedSource
+            extractedDir = nil
+        }
+        defer { if let d = extractedDir { try? fm.removeItem(at: d) } }
 
         // Validate: must be a real SQLite database (magic header "SQLite format 3\0").
         guard isSQLiteFile(at: source) else {
@@ -159,7 +193,6 @@ enum DataBackup {
             return .failure("This isn't a NOOP backup from this app — it's missing the migration bookkeeping a NOOP backup carries (it looks like an Android backup or another app's database), and restoring it would strand your store. To move your history across platforms, export the WHOOP-format CSV on the other device (Settings → Export data) and import that here, or import your original WHOOP / Apple Health export.")
         }
 
-        let fm = FileManager.default
         let dbURL = URL(fileURLWithPath: dbPath)
 
         do {
@@ -181,11 +214,12 @@ enum DataBackup {
 
             do {
                 try fm.copyItem(at: source, to: dbURL)
-                // Restore the backup's own -wal/-shm if present: a macOS backup taken before a
-                // checkpoint folds committed pages into those sidecars, so importing only the main
-                // file would silently drop them. SQLite folds them in on the next open.
-                restoreSidecar(from: source, toMainPath: dbPath, suffix: "-wal")
-                restoreSidecar(from: source, toMainPath: dbPath, suffix: "-shm")
+                // Restore sidecars only for legacy plain-SQLite backups whose WAL wasn't
+                // checkpointed at export. ZIP imports are always checkpointed; no sidecars expected.
+                if extractedDir == nil {
+                    restoreSidecar(from: source, toMainPath: dbPath, suffix: "-wal")
+                    restoreSidecar(from: source, toMainPath: dbPath, suffix: "-shm")
+                }
             } catch {
                 // The live DB was just removed and the replacement didn't land. Roll back to the
                 // snapshot so a failed import leaves the user's data exactly as it was, instead of a
@@ -206,12 +240,16 @@ enum DataBackup {
 
     // MARK: - Helpers
 
-    /// "NOOP-backup-2026-06-07.sqlite"
+    /// Canonical entry name for the SQLite inside a `.noopbak` ZIP. Matches the Android exporter so
+    /// a backup produced on either platform restores on the other.
+    private static let backupEntryName = "noop-backup.sqlite"
+
+    /// "NOOP-backup-2026-06-07.noopbak"
     private static func defaultBackupName() -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
-        return "NOOP-backup-\(f.string(from: Date())).sqlite"
+        return "NOOP-backup-\(f.string(from: Date())).noopbak"
     }
 
     private static func timestamp() -> String {
@@ -221,10 +259,12 @@ enum DataBackup {
         return f.string(from: Date())
     }
 
-    /// `.sqlite` UTType if the system knows it, always falling back to the generic database type so
-    /// the panels still open on systems without a `.sqlite` declaration.
-    private static func sqliteContentTypes() -> [UTType] {
+    /// Content types accepted by the export/import panels. Includes the new `.noopbak` (ZIP),
+    /// generic ZIP, and legacy `.sqlite` / `.database` types so older backups keep working.
+    private static func backupContentTypes() -> [UTType] {
         var types: [UTType] = []
+        if let noopbak = UTType(filenameExtension: "noopbak") { types.append(noopbak) }
+        types.append(.zip)
         if let sqlite = UTType(filenameExtension: "sqlite") { types.append(sqlite) }
         types.append(.database)
         types.append(.data)
@@ -274,6 +314,26 @@ enum DataBackup {
         return names
     }
 
+    /// Read the first 4 bytes and check for the ZIP PK magic (`PK\x03\x04`).
+    private static func isZipFile(at url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 4), head.count >= 4 else { return false }
+        return head[0] == 0x50 && head[1] == 0x4B && head[2] == 0x03 && head[3] == 0x04
+    }
+
+    /// Extract the SQLite entry from a `.noopbak` ZIP at `zipURL` into `destDir`. Each file entry is
+    /// written under its own last-path-component, so the SQLite lands as `<destDir>/<name>.sqlite`
+    /// for the caller to locate. Uses the `Archive` reader (the repo's ZIPFoundation idiom).
+    private static func extractBackupZip(at zipURL: URL, into destDir: URL) throws {
+        let archive = try Archive(url: zipURL, accessMode: .read)
+        for entry in archive where entry.type == .file {
+            let name = (entry.path as NSString).lastPathComponent
+            let out = destDir.appendingPathComponent(name)
+            _ = try archive.extract(entry, to: out)
+        }
+    }
+
     /// Read the first 16 bytes and check for the SQLite magic header.
     private static func isSQLiteFile(at url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
@@ -289,22 +349,9 @@ enum DataBackup {
         if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
     }
 
-    /// Copy `<db>-wal`/`<db>-shm` next to the main backup, under the backup's base name, if they
-    /// exist on disk (only reached when the checkpoint didn't run). Best-effort — failures are ignored.
-    private static func copySidecarsIfPresent(from dbURL: URL, toMainBackup dest: URL) {
-        let fm = FileManager.default
-        for suffix in ["-wal", "-shm"] {
-            let side = URL(fileURLWithPath: dbURL.path + suffix)
-            guard fm.fileExists(atPath: side.path) else { continue }
-            let target = URL(fileURLWithPath: dest.path + suffix)
-            if fm.fileExists(atPath: target.path) { try? fm.removeItem(at: target) }
-            try? fm.copyItem(at: side, to: target)
-        }
-    }
-
-    /// Copy a backup's `<source><suffix>` sidecar next to the live DB if it exists, so a backup whose
-    /// WAL wasn't checkpointed at export restores its committed pages (SQLite folds them in on open).
-    /// Best-effort — failures are ignored. Pairs with `copySidecarsIfPresent` on the export side.
+    /// Copy a legacy backup's `<source><suffix>` sidecar next to the live DB if it exists, so an
+    /// old plain-SQLite backup whose WAL wasn't checkpointed at export restores its committed pages
+    /// (SQLite folds them in on open). Not called for ZIP imports (those are always checkpointed).
     private static func restoreSidecar(from source: URL, toMainPath dbPath: String, suffix: String) {
         let fm = FileManager.default
         let src = URL(fileURLWithPath: source.path + suffix)

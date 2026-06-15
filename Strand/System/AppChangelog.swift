@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "3.4.0"
+    static let currentVersion = "3.5.0"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,14 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "3.5.0",
+            title: "Hand-correct your sleep times + smaller backups",
+            date: "June 2026",
+            items: [
+                "**Sleep (iPhone/Mac):** auto-detection sometimes reads the wrong bed or wake time — now you can fix it. Tap the **pencil** on the Sleep tab to correct a night's **Asleep / Woke** times, and NOOP re-stages the night from the raw sensor data over your corrected window. The correction **sticks** — a later strap sync won't quietly revert it. (For an imported WHOOP-export night, the displayed times update but its recovery/performance stay as WHOOP recorded them.) Thanks @claypilat (#395).",
+                "**Smaller, shareable backups:** exporting your data now produces a compressed **`.noopbak`** file — typically **80–90% smaller** (a 100 MB+ backup becomes ~10–20 MB), small enough to AirDrop, message or email. iPhone, Mac and Android all read each other's, and your older uncompressed backups still import fine. Thanks @ujix (#396).",
+            ]),
         Release(
             version: "3.4.0",
             title: "Tidier Today hero, strap renaming, smarter journal",

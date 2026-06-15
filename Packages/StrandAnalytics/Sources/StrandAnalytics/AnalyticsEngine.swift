@@ -108,7 +108,7 @@ public enum AnalyticsEngine {
     }
 
     /// JSON-encode stage segments to the verbatim array shape CachedSleepSession stores.
-    static func encodeStages(_ stages: [StageSegment]) -> String? {
+    public static func encodeStages(_ stages: [StageSegment]) -> String? {
         guard let data = try? JSONEncoder().encode(stages) else { return nil }
         return String(data: data, encoding: .utf8)
     }

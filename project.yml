@@ -11,7 +11,7 @@ options:
   developmentLanguage: en
 settings:
   base:
-    MARKETING_VERSION: "3.4.0"
+    MARKETING_VERSION: "3.5.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     # Emit localizable strings so Xcode auto-extracts every LocalizedStringKey into the
@@ -47,6 +47,12 @@ packages:
     path: Packages/StrandImport
   StrandDesign:
     path: Packages/StrandDesign
+  # Compresses the full-database `.noopbak` backup (single-entry deflate ZIP) in DataBackup.swift.
+  # Already resolved transitively via StrandImport; linked directly so the app target can
+  # `import ZIPFoundation`. Same version constraint as StrandImport's, so SPM resolves one copy.
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: "0.9.0"
 targets:
   Strand:
     type: application
@@ -63,7 +69,7 @@ targets:
         CFBundleName: NOOP
         CFBundleDisplayName: NOOP
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "128"
+        CFBundleVersion: "129"
         LSMinimumSystemVersion: "13.0"
         LSApplicationCategoryType: public.app-category.healthcare-fitness
         NSBluetoothAlwaysUsageDescription: "NOOP connects directly to your WHOOP strap over Bluetooth to read heart rate, R-R intervals, battery, and sensor data locally on your Mac. Nothing leaves your device."
@@ -104,6 +110,7 @@ targets:
       - package: StrandImport
       - package: StrandDesign
       - package: MarkdownUI
+      - package: ZIPFoundation
   StrandTests:
     type: bundle.unit-test
     platform: macOS
@@ -212,7 +219,7 @@ targets:
           - $(APP_GROUP_ID)
     settings:
       base:
-        CURRENT_PROJECT_VERSION: "83"
+        CURRENT_PROJECT_VERSION: "84"
         PRODUCT_BUNDLE_IDENTIFIER: com.noopapp.noop
         PRODUCT_NAME: NOOP
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -229,6 +236,7 @@ targets:
       - package: StrandImport
       - package: StrandDesign
       - package: MarkdownUI
+      - package: ZIPFoundation
       - target: NOOPiOSWidgets
 
   # WidgetKit + Live Activity extension — the iOS analogue of the macOS menu-bar

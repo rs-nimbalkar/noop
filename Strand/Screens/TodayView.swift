@@ -836,10 +836,12 @@ struct TodayView: View {
     /// Last night's sleep as a shaded band, labelled with its duration.
     private var sleepSpan: OverviewHRChart.SleepSpan? {
         guard let s = sleepToday else { return nil }
+        // Use the EFFECTIVE onset so a hand-corrected bedtime shows the same band/duration here as on
+        // the Sleep tab (not the detected onset). (#318)
         return .init(
-            start: Date(timeIntervalSince1970: TimeInterval(s.startTs)),
+            start: Date(timeIntervalSince1970: TimeInterval(s.effectiveStartTs)),
             end: Date(timeIntervalSince1970: TimeInterval(s.endTs)),
-            label: hoursMinutes(s.endTs - s.startTs)
+            label: hoursMinutes(s.endTs - s.effectiveStartTs)
         )
     }
 

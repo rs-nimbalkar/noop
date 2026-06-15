@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import WhoopStore
 import WhoopProtocol
+import StrandAnalytics
 
 /// Per-day sleep figures the WHOOP export carried verbatim (metricSeries rows written by
 /// WhoopImporter under the imported deviceId). SleepView prefers these over its on-device
@@ -390,7 +391,63 @@ final class Repository: ObservableObject {
         var importedDays = Set<Date>()
         for s in imported { importedDays.insert(endDay(s)) }
         let computedKept = computed.filter { !importedDays.contains(endDay($0)) }
-        return (imported + computedKept).sorted { $0.startTs < $1.startTs }
+        return (imported + computedKept).sorted { $0.effectiveStartTs < $1.effectiveStartTs }
+    }
+
+    /// Hand-correct a night's bed (onset) and/or wake (end) time. `detectedStartTs` is the immutable
+    /// detected key; the corrected onset is stored in `startTsAdjusted` so the key never moves (the
+    /// recompute guard + daily override keep matching on it). The merged session list carries no source
+    /// deviceId (same reason as the journal reads below), so this applies under BOTH the imported and
+    /// computed sources — only the namespace that holds the night updates; the other is a no-op.
+    ///
+    /// Stages are **re-derived from the raw streams** for the corrected `[newStartTs, newEndTs]` window
+    /// via `SleepStager.stageSession` — exactly what WHOOP does, so extending a boundary recovers real
+    /// stages instead of a fabricated "awake" block. Only when the night has no raw data (an imported
+    /// night) does it fall back to reshaping the stored summary (`SleepWindowReclip`). Refreshes so the
+    /// hero re-reads the corrected night immediately.
+    func editSleepTimes(detectedStartTs: Int, oldEndTs: Int, storedStagesJSON: String?,
+                        newStartTs: Int, newEndTs: Int) async {
+        guard let store = await ensureStore() else { return }
+        // Raw streams live under the strap `deviceId`; read a 1h margin around the corrected window.
+        let lo = newStartTs - 3_600, hi = newEndTs + 3_600
+        let grav = (try? await store.gravitySamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
+        let inWindowGravity = grav.lazy.filter { $0.ts >= newStartTs && $0.ts <= newEndTs }.count
+        let windowSeconds = max(1, newEndTs - newStartTs)
+        // Re-derive stages from raw only when the strap DENSELY covers the window (a real worn night) —
+        // a couple of stray samples (e.g. an imported night with incidental strap data) must NOT trigger
+        // a degenerate stageSession that overwrites a good breakdown. ~1 sample / 2 min is the floor.
+        let hasStageableData = inWindowGravity >= max(20, windowSeconds / 120)
+
+        let stagesJSON: String?
+        if hasStageableData {
+            let hr = (try? await store.hrSamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
+            let rr = (try? await store.rrIntervals(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
+            let resp = (try? await store.respSamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
+            // Stage OFF the main actor — Repository is @MainActor and staging a multi-hour window from
+            // tens of thousands of samples would otherwise freeze the UI on Save (mirrors analyzeRecent).
+            let segs = await Task.detached(priority: .utility) {
+                SleepStager.stageSession(start: newStartTs, end: newEndTs,
+                                         grav: grav, hr: hr, rr: rr, resp: resp)
+            }.value
+            stagesJSON = AnalyticsEngine.encodeStages(segs)
+        } else {
+            // No usable strap data (imported night): reshape the stored summary on the wake side. Onset
+            // edits on such nights move only the effective bedtime/`startTsAdjusted`, not the timeline.
+            stagesJSON = SleepWindowReclip.reclip(stagesJSON: storedStagesJSON, sessionStart: detectedStartTs,
+                                                  oldEnd: oldEndTs, newEnd: newEndTs)
+        }
+        // Apply to the source that actually OWNS this block. Try the computed source first; only fall
+        // back to the imported source when no computed row matched — so we never edit a coincidental
+        // same-startTs row in the other namespace (which the old unconditional double-write could do).
+        let computedChanged = (try? await store.applySleepEdit(
+            deviceId: computedDeviceId, detectedStartTs: detectedStartTs,
+            newStartTs: newStartTs, newEndTs: newEndTs, stagesJSON: stagesJSON)) ?? 0
+        if computedChanged == 0 {
+            _ = try? await store.applySleepEdit(
+                deviceId: deviceId, detectedStartTs: detectedStartTs,
+                newStartTs: newStartTs, newEndTs: newEndTs, stagesJSON: stagesJSON)
+        }
+        await refresh()
     }
 
     // MARK: - Metric explorer reads (generic substrate)

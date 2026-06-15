@@ -26,6 +26,7 @@ import WhoopStore
 struct SleepView: View {
     @EnvironmentObject var repo: Repository
     @EnvironmentObject var live: LiveState
+    @EnvironmentObject var intelligence: IntelligenceEngine
 
     // The standard tile grid: ONE adaptive column set, used for every tile group.
     private let tileColumns = [GridItem(.adaptive(minimum: 168), spacing: NoopMetrics.gap)]
@@ -59,6 +60,11 @@ struct SleepView: View {
     /// Draw-in fraction for the Rest hero gauge — owned here so the gauge animates the arc on appear /
     /// when the sleep-performance score changes, exactly as TodayView drives its rings. Presentation-only.
     @State private var heroFraction: Double = 0
+
+    /// Non-nil while the wake-time editor sheet is open. Carries the night's stable key (`startTs`) and
+    /// current wake time so the editor seeds its picker; saving routes through `repo.editSleepWakeTime`,
+    /// which marks the session `userEdited` so a later strap sync can't revert the correction. (#318)
+    @State private var wakeEdit: WakeEdit?
 
     var body: some View {
         // Resolve the memoized model for THIS render. `dataKey` is O(1)-ish (counts + last-row
@@ -127,6 +133,17 @@ struct SleepView: View {
                 navNight = nil
                 modelKey = dataKey
                 model = buildModel()
+            }
+            .sheet(item: $wakeEdit) { edit in
+                SleepTimeEditor(bedTs: edit.bedTs, wakeTs: edit.wakeTs) { newBedTs, newWakeTs in
+                    await repo.editSleepTimes(detectedStartTs: edit.detectedStartTs, oldEndTs: edit.wakeTs,
+                                              storedStagesJSON: edit.stagesJSON,
+                                              newStartTs: newBedTs, newEndTs: newWakeTs)
+                    // Re-score the day so the dashboard aggregates (Rest / recovery) honor the corrected
+                    // sleep window, not just the Sleep tab's session view; then refresh the read cache.
+                    await intelligence.analyzeRecent()
+                    await repo.refresh()
+                }
             }
         }
     }
@@ -231,7 +248,8 @@ struct SleepView: View {
                 stageCard(night, intervals: night.intervals)
             } else if let session = sessionRow(at: nightOffset) {
                 // Stage-less stub purely to reuse Night's date/time formatting.
-                let stub = Night(session: session, stages: Stages(awake: 0, light: 0, deep: 0, rem: 0))
+                let stub = Night(session: session, stages: Stages(awake: 0, light: 0, deep: 0, rem: 0),
+                                 sourceBlocks: dayBlocks(at: nightOffset))
                 nightNavHeader(trailing: stub.spanLabel)
                 sleepWindowRow(stub)
                 ChartCard(
@@ -296,7 +314,8 @@ struct SleepView: View {
                 Rectangle().fill(StrandPalette.hairline).frame(width: 1, height: 30)
                 Spacer(minLength: 12)
                 sleepTime(icon: "sun.max.fill", label: "Woke", value: night.wakeText)
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
+                wakeEditButton(night)
             }
             .frame(maxWidth: .infinity)
         }
@@ -314,6 +333,37 @@ struct SleepView: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    /// Pencil affordance that opens the wake-time editor for `night`. Auto-detection misreads the wake
+    /// time most often (a late lie-in, or a morning stir read as still-asleep), so a one-tap correction
+    /// lives right next to the "Woke" value. A filled pencil marks a night already hand-corrected. (#318)
+    ///
+    /// The hero shows a MERGED/synthetic Night — its `session` carries no `stagesJSON` and a reset
+    /// `userEdited` (mergeDay), with the real stage data in `night.stages`. So resolve the actual stored
+    /// block we're editing — the one whose wake time IS the night's wake — and edit against its detected
+    /// startTs key, current effective bed/wake (to seed the pickers), stagesJSON, and edited state.
+    @ViewBuilder
+    private func wakeEditButton(_ night: Night) -> some View {
+        // Resolve the real stored block by identity (the night's main block), never by re-scanning
+        // `allSessions` for a wake-time match — that guess could pick the wrong source/night and, when
+        // it missed, fall back to the synthetic effective onset (not a real key) so the edit no-oped.
+        if let target = night.editTarget {
+            let isEdited = target.userEdited
+            Button {
+                wakeEdit = WakeEdit(detectedStartTs: target.startTs,
+                                    bedTs: target.effectiveStartTs,
+                                    wakeTs: target.endTs,
+                                    stagesJSON: target.stagesJSON)
+            } label: {
+                Image(systemName: isEdited ? "pencil.circle.fill" : "pencil.circle")
+                    .font(StrandFont.headline)
+                    .foregroundStyle(StrandPalette.restColor)
+            }
+            .buttonStyle(.plain)
+            .help("Edit sleep times")
+            .accessibilityLabel(isEdited ? "Edit sleep times (edited)" : "Edit sleep times")
+        }
     }
 
     /// Full-width proportional stacked stage bar (fallback when no intervals).
@@ -717,7 +767,7 @@ struct SleepView: View {
         }
         let groups = Dictionary(grouping: navSessions, by: endDay)
         return groups.keys.sorted(by: >).map { key in
-            (groups[key] ?? []).sorted { $0.startTs < $1.startTs }
+            (groups[key] ?? []).sorted { $0.effectiveStartTs < $1.effectiveStartTs }
         }
     }
 
@@ -728,12 +778,14 @@ struct SleepView: View {
     private func mergeDay(_ sessions: [CachedSleepSession]) -> Night? {
         guard let first = sessions.first,
               let last = sessions.max(by: { $0.endTs < $1.endTs }) else { return nil }
-        let onset = first.startTs, wake = last.endTs
+        // Use the EFFECTIVE onset (the user's corrected bedtime when present) so the merged night's
+        // timeline base, the "Asleep" label, and the hypnogram clock all reflect the edit. (#318)
+        let onset = first.effectiveStartTs, wake = last.endTs
         var stages = Stages(awake: 0, light: 0, deep: 0, rem: 0)
         var segs: [SleepInterval] = []
         for s in sessions {
-            let shift = TimeInterval(s.startTs - onset)
-            if let seg = decodeSegments(s.stagesJSON, sessionStart: s.startTs), seg.stages.total > 0 {
+            let shift = TimeInterval(s.effectiveStartTs - onset)
+            if let seg = decodeSegments(s.stagesJSON, sessionStart: s.effectiveStartTs), seg.stages.total > 0 {
                 stages.awake += seg.stages.awake; stages.light += seg.stages.light
                 stages.deep  += seg.stages.deep;  stages.rem   += seg.stages.rem
                 for iv in seg.intervals {
@@ -749,7 +801,14 @@ struct SleepView: View {
         let synth = CachedSleepSession(startTs: onset, endTs: wake, efficiency: eff,
                                        restingHr: nil, avgHrv: nil, stagesJSON: nil)
         let realSegs = segs.count >= 2 ? segs.sorted { $0.start < $1.start } : nil
-        return Night(session: synth, stages: stages, realSegments: realSegs)
+        return Night(session: synth, stages: stages, realSegments: realSegs, sourceBlocks: sessions)
+    }
+
+    /// The real stored blocks composing the day at `offset` (for the stage-less stub Night, so its edit
+    /// affordance still targets a real row). Empty when out of range.
+    private func dayBlocks(at offset: Int) -> [CachedSleepSession] {
+        let days = navDays
+        return offset >= 0 && offset < days.count ? days[offset] : []
     }
 
     /// The merged Night for the DAY `offset` stops back from the most recent (0 = last night).
@@ -856,7 +915,7 @@ struct SleepView: View {
         }
         let cal = Calendar.current
         func bedMinutes(_ s: CachedSleepSession) -> Double {
-            let d = Date(timeIntervalSince1970: TimeInterval(s.startTs))
+            let d = Date(timeIntervalSince1970: TimeInterval(s.effectiveStartTs))
             let comps = cal.dateComponents([.hour, .minute], from: d)
             var m = Double((comps.hour ?? 0) * 60 + (comps.minute ?? 0))
             if m < 12 * 60 { m += 24 * 60 }   // wrap evening onsets into one continuous scale
@@ -1226,12 +1285,23 @@ private struct Night {
     /// The REAL per-segment timeline for on-device computed nights (nil for imported nights,
     /// whose export carries totals only — those keep the synthetic reconstruction below). (#77)
     var realSegments: [SleepInterval]? = nil
+    /// The actual stored block(s) this merged Night was built from. `session` above is a SYNTHETIC
+    /// merge for display; an edit must target a real row, so it resolves it from here by identity
+    /// rather than re-scanning by wake time. (#318)
+    var sourceBlocks: [CachedSleepSession] = []
+
+    /// The real stored block a sleep-time edit writes against — the longest (main) block of the night,
+    /// resolved by identity. Its `startTs` is always a genuine detected key, so `applySleepEdit` matches.
+    /// nil when there's no underlying block (a synthetic stub) — the edit affordance is then hidden.
+    var editTarget: CachedSleepSession? {
+        sourceBlocks.max { ($0.endTs - $0.effectiveStartTs) < ($1.endTs - $1.effectiveStartTs) }
+    }
 
     /// Total time in bed in minutes (from reconstructed stages).
     var timeInBed: Double { stages.total }
 
     /// The wall-clock start of the night (for the Hypnogram's clock labels).
-    var onsetDate: Date { Date(timeIntervalSince1970: TimeInterval(session.startTs)) }
+    var onsetDate: Date { Date(timeIntervalSince1970: TimeInterval(session.effectiveStartTs)) }
 
     /// Stage intervals laid end-to-end across the night, in seconds from start.
     /// On-device computed nights use their REAL timeline; imported nights are reconstructed
@@ -1256,15 +1326,15 @@ private struct Night {
         return out
     }
 
-    var onsetText: String { Night.timeFmt.string(from: Date(timeIntervalSince1970: TimeInterval(session.startTs))) }
+    var onsetText: String { Night.timeFmt.string(from: Date(timeIntervalSince1970: TimeInterval(session.effectiveStartTs))) }
     var wakeText: String { Night.timeFmt.string(from: Date(timeIntervalSince1970: TimeInterval(session.endTs))) }
-    var dateLabel: String { Night.dateFmt.string(from: Date(timeIntervalSince1970: TimeInterval(session.startTs))) }
+    var dateLabel: String { Night.dateFmt.string(from: Date(timeIntervalSince1970: TimeInterval(session.effectiveStartTs))) }
 
     /// Date label that becomes a span when the night crosses midnight (onset on a different
     /// calendar day from wake) — e.g. "Fri 13 → Sat 14 Jun" — otherwise a single date. Lets an
     /// aggregated day that started the previous evening read honestly. (#170)
     var spanLabel: String {
-        let onsetDay = Date(timeIntervalSince1970: TimeInterval(session.startTs))
+        let onsetDay = Date(timeIntervalSince1970: TimeInterval(session.effectiveStartTs))
         let wakeDay  = Date(timeIntervalSince1970: TimeInterval(session.endTs))
         let cal = Calendar.current
         if cal.isDate(onsetDay, inSameDayAs: wakeDay) { return Night.dateFmt.string(from: onsetDay) }
@@ -1287,6 +1357,86 @@ private struct Night {
     private static let spanFmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "EEE d"; return f
     }()
+}
+
+// MARK: - Wake-time editor
+
+/// Identifies the night being edited for `.sheet(item:)`. A night's `startTs` is its stable natural
+/// key (wake-time edits never move it), so it doubles as the sheet identity.
+private struct WakeEdit: Identifiable {
+    let detectedStartTs: Int   // immutable detected key the edit writes against
+    let bedTs: Int             // current effective onset (seeds the bed picker)
+    let wakeTs: Int            // current wake (seeds the wake picker)
+    let stagesJSON: String?
+    var id: Int { detectedStartTs }
+}
+
+/// A small sheet to hand-correct a night's bed (onset) and wake (end) times. Seeds both pickers with the
+/// current values; the wake picker is bounded to after the chosen bedtime. Hands the chosen unix-second
+/// (bed, wake) back via `onSave`. Pure presentation + a single async save — persistence lives in the repo.
+private struct SleepTimeEditor: View {
+    let onSave: (Int, Int) async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var bed: Date
+    @State private var wake: Date
+    @State private var saving = false
+
+    init(bedTs: Int, wakeTs: Int, onSave: @escaping (Int, Int) async -> Void) {
+        self.onSave = onSave
+        _bed = State(initialValue: Date(timeIntervalSince1970: TimeInterval(bedTs)))
+        _wake = State(initialValue: Date(timeIntervalSince1970: TimeInterval(wakeTs)))
+    }
+
+    /// Wake must land after bedtime (≥ 1 min) and within a day of it — so the picker can't offer a wake
+    /// before you fell asleep, and moving bedtime past wake nudges wake along with it.
+    private var wakeRange: ClosedRange<Date> {
+        bed.addingTimeInterval(60) ... bed.addingTimeInterval(24 * 3600)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            Text("Edit sleep times").font(StrandFont.title2).foregroundStyle(StrandPalette.textPrimary)
+            Text("Correct when you went to bed and woke. Stages are re-derived from your data; the edit is kept through the next strap sync.")
+                .font(StrandFont.subhead).foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            NoopCard(padding: NoopMetrics.cardPadding, tint: StrandPalette.restColor) {
+                VStack(alignment: .leading, spacing: 10) {
+                    DatePicker("Asleep", selection: $bed,
+                               displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.compact)
+                        .font(StrandFont.body)
+                        .tint(StrandPalette.restColor)
+                    Divider().overlay(StrandPalette.hairline)
+                    DatePicker("Woke", selection: $wake, in: wakeRange,
+                               displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.compact)
+                        .font(StrandFont.body)
+                        .tint(StrandPalette.restColor)
+                }
+            }
+
+            HStack(spacing: NoopMetrics.gap) {
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.noopGhost)
+                    .disabled(saving)
+                Spacer()
+                Button(saving ? "Saving…" : "Save") {
+                    saving = true
+                    Task {
+                        await onSave(Int(bed.timeIntervalSince1970), Int(wake.timeIntervalSince1970))
+                        dismiss()
+                    }
+                }
+                .buttonStyle(.noopPrimary)
+                .disabled(saving)
+            }
+        }
+        .padding(NoopMetrics.screenPadding)
+        .frame(minWidth: 360)
+        .background(StrandPalette.surfaceOverlay)
+    }
 }
 
 // MARK: - Preview
