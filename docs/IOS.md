@@ -1,7 +1,7 @@
 # iOS — Install & Build
 
 > **iOS is now a direct download (v1.96).** Grab **`NOOP-v<version>-ios.ipa`** from the
-> [Releases](../../../releases) page and install it with **AltStore** or **SideStore** — see
+> [Releases](https://noop.fans/NoopApp/noop/releases) page and install it with **AltStore** or **SideStore** — see
 > **[Install (sideload)](#install-sideload)** below. No Mac, no Xcode, no App Store, and no Apple
 > Developer account needed — **and NOOP stays anonymous**, because the `.ipa` we ship is *unsigned*
 > and **you** sign it on your own iPhone with your own free Apple ID. The app target (`NOOPiOS` +
@@ -18,7 +18,7 @@ Nothing about this touches NOOP's identity or Apple's servers on our side.
 1. **Install a sideloader on your computer** — [AltStore](https://altstore.io) or
    [SideStore](https://sidestore.io) (both free). Follow their one-time setup (it installs a helper +
    AltStore/SideStore onto your iPhone using your own Apple ID).
-2. **Download `NOOP-v<version>-ios.ipa`** from [Releases](../../../releases) to your iPhone (or your
+2. **Download `NOOP-v<version>-ios.ipa`** from [Releases](https://noop.fans/NoopApp/noop/releases) to your iPhone (or your
    computer, then AirDrop/transfer it).
 3. **Open the `.ipa` with AltStore/SideStore** (Share → AltStore, or the app's "+" button). It signs
    and installs NOOP. First launch may need **Settings → General → VPN & Device Management → trust

@@ -676,8 +676,10 @@ private fun ScoreHeroRow(
                 onInfo = { onScoreInfo(ScoreSection.CHARGE) },
             ) { ringDiameter ->
                 Box(contentAlignment = Alignment.Center) {
-                    RecoveryRing(
-                        score = recovery ?: 0.0,
+                    GlowRing(
+                        fraction = ((recovery ?: 0.0) / 100.0).toFloat(),
+                        value = recovery ?: 0.0,
+                        color = Palette.recoveryColor(recovery ?: 0.0),
                         diameter = ringDiameter,
                         lineWidth = ringDiameter * 0.10f,
                         showsLabel = recovery != null,
@@ -695,13 +697,15 @@ private fun ScoreHeroRow(
                 onInfo = { onScoreInfo(ScoreSection.EFFORT) },
             ) { ringDiameter ->
                 Box(contentAlignment = Alignment.Center) {
-                    StrainGauge(
-                        strain = strain?.let { UnitFormatter.effortValue(it, effortScale) } ?: 0.0,
-                        outOf = effortOutOf,
-                        valueText = strain?.let { UnitFormatter.effortDisplay(it, effortScale) },
+                    val effortVal = strain?.let { UnitFormatter.effortValue(it, effortScale) } ?: 0.0
+                    GlowRing(
+                        fraction = (if (effortOutOf > 0) effortVal / effortOutOf else 0.0).toFloat(),
+                        value = effortVal,
+                        color = Palette.effortTint((strain ?: 0.0) / 100.0),
                         diameter = ringDiameter,
                         lineWidth = ringDiameter * 0.10f,
                         showsLabel = strain != null,
+                        format = { if (effortScale == EffortScale.WHOOP) String.format("%.1f", it) else it.toInt().toString() },
                     )
                     if (strain == null) RingNoData()
                 }
@@ -713,8 +717,10 @@ private fun ScoreHeroRow(
                 onInfo = { onScoreInfo(ScoreSection.REST) },
             ) { ringDiameter ->
                 Box(contentAlignment = Alignment.Center) {
-                    RecoveryRing(
-                        score = restScore ?: 0.0,
+                    GlowRing(
+                        fraction = ((restScore ?: 0.0) / 100.0).toFloat(),
+                        value = restScore ?: 0.0,
+                        color = Palette.recoveryColor(restScore ?: 0.0),
                         diameter = ringDiameter,
                         lineWidth = ringDiameter * 0.10f,
                         showsLabel = restScore != null,

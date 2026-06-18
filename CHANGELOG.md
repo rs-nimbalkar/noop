@@ -17,6 +17,14 @@ approximate; downloads are on the [Releases](https://noop.fans/NoopApp/noop/rele
 
 ---
 
+## 4.6.2 — A bolder Today screen (all platforms)
+
+- **The Today scores got a glow-up.** Charge, Effort and Rest now ride on crisp, full-circle gauges
+  that sweep in and count up — a cleaner, bolder at-a-glance read on iPhone and Android. (Thanks to
+  @unruffled688 for the iOS redesign — #23.)
+- **Fixed:** the **Releases** links in the README and docs pointed at a path that 404'd on the new
+  home — they now go straight to the downloads page. (#26)
+
 ## 4.6.1 — NOOP has a new home (all platforms)
 
 - **NOOP now lives at [noop.fans](https://noop.fans/NoopApp/noop).** After the project's GitHub was

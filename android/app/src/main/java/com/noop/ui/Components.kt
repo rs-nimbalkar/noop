@@ -7,6 +7,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +25,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -35,6 +39,7 @@ import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -750,6 +755,73 @@ fun BevelGauge(
 // the macOS RecoveryRing.valueFormat. The state word + tip colour sample the recovery (gold)
 // ramp. Unlike the Bevel 240° gauge it draws the BRAND GLYPH: an open ~80% ring starting at
 // −90° (12 o'clock) clockwise, a solid gold centre core dot and a micro "NOOP" wordmark.
+
+// MARK: - GlowRing — crisp WHOOP-style score ring (Compose parity with iOS StrandDesign.GlowRing, #23)
+//
+// A clean solid arc with round caps over a clearly-visible full-circle track, a bold centred number
+// that counts up from 0, and a tight low-alpha glow hugging the arc. The arc springs in from 12
+// o'clock and re-animates when the value changes (day nav). minSdk-safe (no RenderEffect blur).
+@Composable
+fun GlowRing(
+    fraction: Float,
+    value: Double,
+    color: Color,
+    diameter: Dp,
+    lineWidth: Dp,
+    modifier: Modifier = Modifier,
+    showsLabel: Boolean = true,
+    format: (Double) -> String = { it.toInt().toString() },
+) {
+    val target = fraction.coerceIn(0f, 1f)
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { started = true }
+    val animFraction by animateFloatAsState(
+        targetValue = if (started) target else 0f,
+        animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow),
+        label = "glowring-fraction",
+    )
+    val animValue by animateFloatAsState(
+        targetValue = if (started) value.toFloat() else 0f,
+        animationSpec = tween(durationMillis = 850, easing = FastOutSlowInEasing),
+        label = "glowring-value",
+    )
+    val trackColor = Palette.textPrimary.copy(alpha = 0.10f)
+    Box(modifier = modifier.size(diameter), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = lineWidth.toPx()
+            val inset = stroke / 2f
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+            val tl = Offset(inset, inset)
+            // Full-circle track so the arc reads as a fraction of a circle (like WHOOP).
+            drawArc(
+                color = trackColor, startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                topLeft = tl, size = arcSize, style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+            val sweep = animFraction.coerceIn(0.0001f, 1f) * 360f
+            // Tight glow — a wider, low-alpha arc under the crisp one (minSdk-safe, no RenderEffect).
+            drawArc(
+                color = color.copy(alpha = 0.38f), startAngle = -90f, sweepAngle = sweep, useCenter = false,
+                topLeft = tl, size = arcSize, style = Stroke(width = stroke * 1.5f, cap = StrokeCap.Round),
+            )
+            // The crisp, solid arc — from 12 o'clock clockwise.
+            drawArc(
+                color = color, startAngle = -90f, sweepAngle = sweep, useCenter = false,
+                topLeft = tl, size = arcSize, style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+        }
+        if (showsLabel) {
+            Text(
+                text = format(animValue.toDouble()),
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (diameter.value * 0.34f).sp,
+                    color = Palette.textPrimary,
+                ),
+                maxLines = 1,
+            )
+        }
+    }
+}
 
 @Composable
 fun RecoveryRing(

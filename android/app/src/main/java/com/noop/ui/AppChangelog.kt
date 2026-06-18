@@ -25,7 +25,7 @@ object AppChangelog {
      * Bump this when you add a release below. The "What's New" sheet shows automatically when the
      * stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
      */
-    const val CURRENT_VERSION = "4.6.1"
+    const val CURRENT_VERSION = "4.6.2"
 
     data class Release(
         val version: String,
@@ -36,6 +36,15 @@ object AppChangelog {
 
     /** Newest first. */
     val releases: List<Release> = listOf(
+        Release(
+            version = "4.6.2",
+            title = "A bolder Today screen",
+            date = "June 2026",
+            items = listOf(
+                "**The Today scores got a glow-up.** Charge, Effort and Rest now ride on crisp, full-circle gauges that sweep in and count up — a cleaner, bolder at-a-glance read on iPhone and Android. (Thanks to @unruffled688 for the iOS redesign — #23.)",
+                "Fixed: the **Releases** links in the project README and docs pointed at a path that returned a 404 on the new home — they now go straight to the downloads page. (#26)",
+            ),
+        ),
         Release(
             version = "4.6.1",
             title = "NOOP has a new home",
