@@ -16,7 +16,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.DirectionsWalk
@@ -72,6 +75,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -954,8 +959,10 @@ private fun ManualWorkoutDialog(
     val nowSec = System.currentTimeMillis() / 1000
     // Pre-fill from the edited row ("detected" shown as "Activity" so a re-label starts clean).
     var sport by remember { mutableStateOf(editing?.let { WorkoutEditing.displaySport(it.sport) } ?: "") }
-    var minsAgo by remember {
-        mutableStateOf(editing?.let { ((nowSec - it.startTs) / 60).coerceAtLeast(0).toString() } ?: "60")
+    // #598 — absolute start date+time (parity with the macOS/iOS sheet's DatePicker) instead of the old
+    // "minutes ago" field. Defaults to the edited row's start, or one hour ago for a fresh add.
+    var startMillis by remember {
+        mutableStateOf((editing?.startTs ?: (nowSec - 3_600)) * 1000L)
     }
     var durationMin by remember {
         mutableStateOf(
@@ -966,23 +973,22 @@ private fun ManualWorkoutDialog(
     var avgHr by remember { mutableStateOf(editing?.avgHr?.toString() ?: "") }
     var kcal by remember { mutableStateOf(editing?.energyKcal?.let { it.roundToInt().toString() } ?: "") }
 
-    // Build the validated row (null disables Save). Start = now − minsAgo. Captured fields preserved.
+    // Build the validated row (null disables Save). Start = the chosen date+time. Captured fields preserved.
     val built: WorkoutRow? = run {
-        val mins = minsAgo.trim().toLongOrNull()
         val dur = durationMin.trim().toIntOrNull()
         val hrText = avgHr.trim()
         val kText = kcal.trim()
         // A typed-but-unparseable number is invalid (e.g. "abc" in Avg HR) — reject before building.
         val hr: Int? = if (hrText.isEmpty()) null else hrText.toIntOrNull()
         val k: Double? = if (kText.isEmpty()) null else kText.toDoubleOrNull()
-        if (mins == null || mins < 0 || dur == null) return@run null
+        if (dur == null) return@run null
         if (hrText.isNotEmpty() && hr == null) return@run null
         if (kText.isNotEmpty() && k == null) return@run null
         // A manual workout ALWAYS lives under the strap source (where live-tracked sessions land), so
         // a "duplicate as manual" of an imported apple-health/whoop row never writes back to it.
         val base = WorkoutEditing.buildManualRow(
             deviceId = "my-whoop",
-            startSeconds = nowSec - mins * 60,
+            startSeconds = (startMillis / 1000L).coerceAtMost(nowSec),
             durationMin = dur,
             sport = sport,
             avgHr = hr,
@@ -1020,7 +1026,7 @@ private fun ManualWorkoutDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 SportPickerField(sport, onChange = { sport = it })
-                DialogField("Started (minutes ago)", minsAgo, onChange = { minsAgo = it }, numeric = true)
+                StartTimeField(startMillis, onPick = { startMillis = it })
                 DialogField("Duration (minutes)", durationMin, onChange = { durationMin = it }, numeric = true)
                 DialogField("Avg HR (bpm, optional)", avgHr, onChange = { avgHr = it }, numeric = true)
                 DialogField("Calories (kcal, optional)", kcal, onChange = { kcal = it }, numeric = true)
@@ -1062,6 +1068,54 @@ private fun ManualWorkoutDialog(
  * tapping anything keeps whatever was typed. The list only shows while the typed text is a partial
  * match (an exact catalogue hit, or a free-typed sport, collapses it).
  */
+/**
+ * Absolute start date + time for the manual add/edit dialog — parity with the macOS/iOS sheet's
+ * DatePicker (#598; the old Android sheet only took "minutes ago"). A tappable row that opens a date
+ * picker, then chains to a time picker, both capped at now (you can't log a workout in the future).
+ */
+@Composable
+private fun StartTimeField(millis: Long, onPick: (Long) -> Unit) {
+    val context = LocalContext.current
+    val label = remember(millis) { SimpleDateFormat("d MMM yyyy, h:mm a", Locale.US).format(java.util.Date(millis)) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Started", style = NoopType.footnote, color = Palette.textSecondary)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(Palette.surfaceInset)
+                .border(1.dp, Palette.hairline, RoundedCornerShape(10.dp))
+                .clickable {
+                    val cal = Calendar.getInstance().apply { timeInMillis = millis }
+                    DatePickerDialog(
+                        context,
+                        { _, y, mo, d ->
+                            TimePickerDialog(
+                                context,
+                                { _, h, mi ->
+                                    val c = Calendar.getInstance().apply {
+                                        timeInMillis = millis
+                                        set(Calendar.YEAR, y); set(Calendar.MONTH, mo); set(Calendar.DAY_OF_MONTH, d)
+                                        set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, mi); set(Calendar.SECOND, 0)
+                                    }
+                                    onPick(c.timeInMillis.coerceAtMost(System.currentTimeMillis()))
+                                },
+                                cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), false,
+                            ).show()
+                        },
+                        cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH),
+                    ).apply { datePicker.maxDate = System.currentTimeMillis() }.show()
+                }
+                .padding(horizontal = 12.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(Icons.Filled.CalendarMonth, contentDescription = null, tint = Palette.textTertiary, modifier = Modifier.width(16.dp))
+            Text(label, style = NoopType.body, color = Palette.textPrimary)
+        }
+    }
+}
+
 @Composable
 private fun SportPickerField(value: String, onChange: (String) -> Unit) {
     val sportScroll = rememberScrollState()
