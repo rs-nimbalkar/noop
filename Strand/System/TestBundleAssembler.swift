@@ -24,4 +24,27 @@ enum TestBundleAssembler {
             return FileExport.BundleEntry(name: entry.name, data: Data(scrubbed.utf8))
         }
     }
+
+    /// Hard cap the bundle at `capBytes` (20 MB default, under GitHub's 25 MB; spec section 5.4). The
+    /// strap-log tail is already bounded, so only raw-capture can exceed. We keep the MOST-RECENT tail of
+    /// raw-capture.jsonl (newest data is the most diagnostic) and trim from the front. Returns the capped
+    /// entries plus whether any truncation happened, which the caller writes to meta.truncated.
+    static func capEntries(_ entries: [FileExport.BundleEntry],
+                           capBytes: Int = 20 * 1024 * 1024) -> (entries: [FileExport.BundleEntry], truncated: Bool) {
+        let total = entries.reduce(0) { $0 + $1.data.count }
+        guard total > capBytes else { return (entries, false) }
+        // Budget for everything that is NOT raw-capture (kept whole), then give raw-capture the remainder.
+        let rawName = "raw-capture.jsonl"
+        let nonRaw = entries.filter { $0.name != rawName }.reduce(0) { $0 + $1.data.count }
+        let budget = max(0, capBytes - nonRaw)
+        var truncated = false
+        let capped = entries.map { entry -> FileExport.BundleEntry in
+            guard entry.name == rawName, entry.data.count > budget else { return entry }
+            truncated = true
+            // Keep the tail (most recent): the last `budget` bytes.
+            let tail = entry.data.suffix(budget)
+            return FileExport.BundleEntry(name: entry.name, data: Data(tail))
+        }
+        return (capped, truncated)
+    }
 }

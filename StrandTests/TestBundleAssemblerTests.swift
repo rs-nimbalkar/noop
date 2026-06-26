@@ -27,4 +27,29 @@ final class TestBundleAssemblerTests: XCTestCase {
     func testStampsRedactionV2() {
         XCTAssertEqual(TestBundleAssembler.redactionVersion, "v2")
     }
+
+    func testCapTruncatesRawCaptureTailAndFlags() {
+        // report.txt + meta.json are small; raw-capture blows the cap. We keep the most-recent tail.
+        let small = FileExport.BundleEntry(name: "report.txt", data: Data("small".utf8))
+        let oversized = String(repeating: "x", count: 40 * 1024 * 1024)  // 40 MB of raw-capture
+        let entries = [small, FileExport.BundleEntry(name: "raw-capture.jsonl", data: Data(oversized.utf8))]
+
+        let (capped, truncated) = TestBundleAssembler.capEntries(entries, capBytes: 20 * 1024 * 1024)
+        XCTAssertTrue(truncated, "the bundle exceeded the cap so truncated must be true")
+        let total = capped.reduce(0) { $0 + $1.data.count }
+        XCTAssertLessThanOrEqual(total, 20 * 1024 * 1024)
+        // report.txt is preserved in full; only raw-capture is trimmed.
+        XCTAssertEqual(capped.first { $0.name == "report.txt" }?.data, small.data)
+        let raw = capped.first { $0.name == "raw-capture.jsonl" }!
+        XCTAssertLessThan(raw.data.count, oversized.utf8.count)
+        // We keep the TAIL (most recent), so the last byte survives.
+        XCTAssertEqual(raw.data.last, Data(oversized.utf8).last)
+    }
+
+    func testCapLeavesUndersizedBundleUntouched() {
+        let entries = [FileExport.BundleEntry(name: "report.txt", data: Data("tiny".utf8))]
+        let (capped, truncated) = TestBundleAssembler.capEntries(entries, capBytes: 20 * 1024 * 1024)
+        XCTAssertFalse(truncated)
+        XCTAssertEqual(capped, entries)
+    }
 }
