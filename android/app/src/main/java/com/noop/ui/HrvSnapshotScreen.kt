@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.analytics.HrvAnalyzer
+import com.noop.analytics.HrvAnalyzerTrace
 import com.noop.analytics.SpotHrvReading
 import com.noop.data.MetricSeriesRow
 import kotlinx.coroutines.delay
@@ -133,7 +134,24 @@ fun HrvSnapshotScreen(
             secondsRemaining -= 1
         }
         // End the capture and run the full cleaning analysis over everything collected.
-        result = HrvAnalyzer.analyzeRaw(captureBuffer.value.map { it.toDouble() }, HrvAnalyzer.DEFAULT_SPOT_MAX_REJECTED_FRACTION)
+        val raw = captureBuffer.value.map { it.toDouble() }
+        // HRV & Autonomic test mode (Test Centre Group G): when the mode is on, emit the cleaning trace
+        // (nInput / nClean / rejected fraction, the range + Malik ectopic counts, the minBeats + spot
+        // gates, RMSSD/SDNN/meanNN) tagged HRV. analyzeTrace returns the SAME HrvResult analyzeRaw would
+        // (it reuses analyzeRaw verbatim), so the headline RMSSD is byte-identical with the trace on or off.
+        // Zero cost when off: one SharedPreferences bool read and analyzeTrace is never called, so the plain
+        // analyzeRaw path below runs untouched. Mirrors the macOS HRVSnapshotView wiring.
+        result = if (com.noop.testcentre.TestCentre.from(context)
+                .active(com.noop.testcentre.TestDomain.HRV)
+        ) {
+            val (traced, lines) = HrvAnalyzerTrace.analyzeTrace(
+                raw, HrvAnalyzer.DEFAULT_SPOT_MAX_REJECTED_FRACTION, path = "spot",
+            )
+            for (line in lines) viewModel.ble.externalLog(line, com.noop.testcentre.TestDomain.HRV)
+            traced
+        } else {
+            HrvAnalyzer.analyzeRaw(raw, HrvAnalyzer.DEFAULT_SPOT_MAX_REJECTED_FRACTION)
+        }
         phase = HrvPhase.Done
     }
 

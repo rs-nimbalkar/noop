@@ -1114,6 +1114,15 @@ class WhoopBleClient(
                             if (testCentre.active(com.noop.testcentre.TestDomain.SLEEP))
                                 { s -> log(s, com.noop.testcentre.TestDomain.SLEEP) }
                             else null,
+                        // Recovery (Charge) test mode (Test Centre Group G): when the RECOVERY domain is on,
+                        // route this post-backfill pass's per-night Charge term-breakdown into the
+                        // .recovery-tagged strap log too, not only the UI 15-min loop. Zero-cost when off
+                        // (the gate is one SharedPreferences bool read and the sink stays null → the Charge
+                        // score path is byte-identical). log() PII-scrubs.
+                        recoveryTraceSink =
+                            if (testCentre.active(com.noop.testcentre.TestDomain.RECOVERY))
+                                { s -> log(s, com.noop.testcentre.TestDomain.RECOVERY) }
+                            else null,
                     )
                 }.onSuccess {
                     log("Backfill: post-sync scoring pass done")

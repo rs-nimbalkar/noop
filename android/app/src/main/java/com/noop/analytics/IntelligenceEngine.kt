@@ -136,10 +136,17 @@ object IntelligenceEngine {
         // default) = byte-identical default path , analyzeDay then runs its untraced staging. Mirrors the
         // Swift sleepTraceActive wiring in IntelligenceEngine.swift.
         sleepTraceSink: ((String) -> Unit)? = null,
+        // Recovery (Charge) test-mode trace sink (Test Centre Group G). The analytics layer is Context-free,
+        // so the Context-aware caller (AppViewModel / WhoopBleClient) reads TestCentre.active(RECOVERY) and
+        // passes a non-null sink ONLY when the mode is on, routing each Charge term-breakdown line to the
+        // .recovery-tagged strap log. null (the default) = byte-identical default path; the Charge score is
+        // unchanged because the trace reuses RecoveryScorer.recovery verbatim. Mirrors the Swift
+        // recoveryTraceActive wiring in IntelligenceEngine.swift.
+        recoveryTraceSink: ((String) -> Unit)? = null,
     ): List<Computed> = withContext(Dispatchers.Default) {
         analyzeRecentOnCpu(repo, profile, maxDays, importedDeviceId, maxHROverride, nowSeconds,
             ownerSource, manualStepCoefficient, persistStepsCalibration, baselineEpoch, recoveryEpoch, diag,
-            useExperimentalSleepV2, sleepTraceSink)
+            useExperimentalSleepV2, sleepTraceSink, recoveryTraceSink)
     }
 
     /** History span for the one-shot Effort rescore , large enough to cover any real wear history,
@@ -203,6 +210,10 @@ object IntelligenceEngine {
         // each scored day threads it into AnalyticsEngine.analyzeDay so detectSleep's gate trace + the Rest
         // sub-score line forward line-by-line to the .sleep-tagged strap log. Mirrors Swift.
         sleepTraceSink: ((String) -> Unit)? = null,
+        // Recovery (Charge) test-mode trace sink (Test Centre Group G). null = byte-identical default; when
+        // non-null each scored night emits its Charge term-breakdown to the .recovery-tagged strap log via
+        // RecoveryScorerTrace.recoveryTrace, whose score is RecoveryScorer.recovery verbatim. Mirrors Swift.
+        recoveryTraceSink: ((String) -> Unit)? = null,
     ): List<Computed> {
         val hrvCfg = Baselines.metricCfg["hrv"] ?: return emptyList()
         val rhrCfg = Baselines.metricCfg["resting_hr"] ?: return emptyList()
@@ -543,6 +554,14 @@ object IntelligenceEngine {
                 tzOffsetSeconds, habitualMidsleepSec,
             )
             val recovery = recomputeRecovery(daily, baselines2)
+            // Charge term-breakdown trace (Test Centre Group G): only when the Recovery test mode is on
+            // (recoveryTraceSink non-null). Emits which term moved Charge and which was nil and forced the
+            // renorm, tagged .recovery. The trace's score is RecoveryScorer.recovery verbatim, so the
+            // `recovery` written above is unchanged. Zero cost when off (the sink stays null, this branch
+            // is skipped, recoveryTraceLines is never built). Mirrors the Swift recoveryTraceActive wiring.
+            if (recoveryTraceSink != null) {
+                for (line in recoveryTraceLines(daily, baselines2)) recoveryTraceSink(line)
+            }
             val skinTempDevC = recomputeSkinTempDev(res.nightlySkinTempC, baselines2.skinTemp)
             RestScorer.restFromDaily(daily)?.let { rest ->
                 restRows.add(MetricSeriesRow(deviceId = computedId, day = daily.day, key = "sleep_performance", value = rest))
@@ -836,6 +855,40 @@ object IntelligenceEngine {
             sleepPerf = restQuality,
             skinTempDev = daily.skinTempDevC,
         )
+    }
+
+    /**
+     * The Charge term-breakdown trace lines for one day (Recovery test mode, Group G). Pure: it feeds the
+     * SAME inputs [recomputeRecovery] does (the SAME [restQuality] derivation) into the side-effect-free
+     * [RecoveryScorerTrace.recoveryTrace], whose returned score IS [RecoveryScorer.recovery] verbatim, so
+     * the trace can never diverge from the Charge number written for the day. Empty when a hard input
+     * (HRV / RHR / HRV-baseline) is missing, mirroring [recomputeRecovery]'s own early-null. Only CALLED
+     * when the Recovery test mode is on, so it costs nothing when the mode is off. Mirrors the Swift
+     * recoveryTraceLines.
+     */
+    private fun recoveryTraceLines(daily: DailyMetric, baselines: ProfileBaselines): List<String> {
+        val hrvVal = daily.avgHrv
+        val rhrVal = daily.restingHr
+        val hrvBase = baselines.hrv
+        if (hrvVal == null || rhrVal == null || hrvBase == null) {
+            return listOf(
+                "charge day=${daily.day} nilScore reason=missingInput (hrv/rhr/hrvBaseline required)",
+            )
+        }
+        val restQuality = RestScorer.restFromDaily(daily)?.let { it / 100.0 } ?: daily.efficiency
+        val (_, trace) = RecoveryScorerTrace.recoveryTrace(
+            hrv = hrvVal,
+            rhr = rhrVal.toDouble(),
+            resp = daily.respRateBpm,
+            hrvBaseline = hrvBase,
+            rhrBaseline = baselines.restingHR,
+            respBaseline = baselines.resp,
+            sleepPerf = restQuality,
+            skinTempDev = daily.skinTempDevC,
+        )
+        // Prefix each line with the day key so a multi-night export stays parseable, matching the sleep
+        // trace's per-day shape.
+        return trace.map { "charge day=${daily.day} " + it.removePrefix("charge ") }
     }
 
     /**

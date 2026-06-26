@@ -40,3 +40,52 @@ object SleepReadout {
         return null
     }
 }
+
+/**
+ * Pure values for the Recovery (Charge) and HRV live-readout panels (Test Centre Group G). Kotlin twin of
+ * the Swift TestReadout. Each parses the tagged log tail the Recovery / HRV emitters write, so the panel
+ * reflects exactly the last Charge breakdown or HRV computation. No state, no IO, no em-dashes.
+ */
+object TestReadout {
+
+    /**
+     * The most recent Charge score + band fragment from the RECOVERY-tagged tail, or null. The emitter
+     * writes "[recovery] charge day=... score=<n> band=<b> ..." (or a "nilScore reason=..." line when the
+     * night could not be scored). Returns the score/band fragment so the panel reads the same number the
+     * dashboard shows; falls back to the nil-reason when there is no score yet. Mirrors the Swift parser.
+     */
+    fun lastChargeBreakdown(taggedTail: List<String>): String? {
+        for (line in taggedTail.asReversed()) {
+            val si = line.indexOf("score=")
+            if (si >= 0) {
+                val rest = line.substring(si)            // "score=.. band=.. (..)"
+                val upto = rest.takeWhile { it != '(' }.trim()
+                if (upto.isNotEmpty()) return upto
+            }
+            val ni = line.indexOf("nilScore reason=")
+            if (ni >= 0) {
+                val token = line.substring(ni + "nilScore reason=".length).takeWhile { it != ' ' }
+                if (token.isNotEmpty()) return "no score ($token)"
+            }
+        }
+        return null
+    }
+
+    /**
+     * The most recent HRV result fragment from the HRV-tagged tail, or null. The emitter writes
+     * "[hrv] hrv rmssd=<n>ms sdnn=<n>ms meanNN=<n>ms" on success, or "[hrv] hrv result=nil (..)" when a
+     * gate refused the reading. Returns the rmssd/sdnn fragment, or the nil note, so the panel reads the
+     * same outcome the snapshot screen showed. Mirrors the Swift parser.
+     */
+    fun lastHrvComputation(taggedTail: List<String>): String? {
+        for (line in taggedTail.asReversed()) {
+            val ri = line.indexOf("rmssd=")
+            if (ri >= 0) {
+                val frag = line.substring(ri).trim()
+                if (frag.isNotEmpty()) return frag
+            }
+            if (line.contains("result=nil")) return "no reading (filtered out)"
+        }
+        return null
+    }
+}

@@ -644,6 +644,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                                     .active(com.noop.testcentre.TestDomain.SLEEP))
                                 { line -> ble.externalLog(line, com.noop.testcentre.TestDomain.SLEEP) }
                             else null,
+                        // Recovery (Charge) test mode (Test Centre Group G): when the RECOVERY domain is on,
+                        // route each night's Charge term-breakdown into the .recovery-tagged strap log so a
+                        // "Charge looks wrong" report shows which term moved it (and which was nil). Zero-cost
+                        // when off: one SharedPreferences bool read and the sink stays null, so the Charge
+                        // score path is byte-identical. Mirrors the macOS recoveryTraceActive wiring.
+                        recoveryTraceSink =
+                            if (com.noop.testcentre.TestCentre.from(appContext)
+                                    .active(com.noop.testcentre.TestDomain.RECOVERY))
+                                { line -> ble.externalLog(line, com.noop.testcentre.TestDomain.RECOVERY) }
+                            else null,
                     )
                     // analyzeRecent now hops to Dispatchers.Default; a scope cancellation surfaces as a
                     // CancellationException that runCatching would otherwise swallow, breaking the loop's
