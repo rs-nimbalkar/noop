@@ -654,6 +654,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                                     .active(com.noop.testcentre.TestDomain.RECOVERY))
                                 { line -> ble.externalLog(line, com.noop.testcentre.TestDomain.RECOVERY) }
                             else null,
+                        // Steps test mode (Test Centre): when the STEPS domain is on, route the per-day 5/MG
+                        // raw-counter trace + the WHOOP-4 calibration trace into the .steps-tagged strap log so
+                        // a "steps look off" report shows the wrap-aware deltas and the calibration state.
+                        // Zero-cost when off: one SharedPreferences bool read and the sink stays null, so the
+                        // steps total path is byte-identical. Mirrors the macOS stepsTraceActive wiring.
+                        stepsTraceSink =
+                            if (com.noop.testcentre.TestCentre.from(appContext)
+                                    .active(com.noop.testcentre.TestDomain.STEPS))
+                                { line -> ble.externalLog(line, com.noop.testcentre.TestDomain.STEPS) }
+                            else null,
                     )
                     // analyzeRecent now hops to Dispatchers.Default; a scope cancellation surfaces as a
                     // CancellationException that runCatching would otherwise swallow, breaking the loop's

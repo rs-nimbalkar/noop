@@ -143,10 +143,17 @@ object IntelligenceEngine {
         // unchanged because the trace reuses RecoveryScorer.recovery verbatim. Mirrors the Swift
         // recoveryTraceActive wiring in IntelligenceEngine.swift.
         recoveryTraceSink: ((String) -> Unit)? = null,
+        // Steps test-mode trace sink (Test Centre). The analytics layer is Context-free, so the Context-aware
+        // caller (AppViewModel / WhoopBleClient) reads TestCentre.active(STEPS) and passes a non-null sink ONLY
+        // when the mode is on, routing each line to the .steps-tagged strap log. null (the default) =
+        // byte-identical default path: the trace recomputes the SAME wrap-aware @57 sum analyzeDay already did,
+        // and reuses StepsEstimateEngine.calibrate/estimate verbatim, so the steps total is unchanged. Mirrors
+        // the Swift stepsTraceActive wiring.
+        stepsTraceSink: ((String) -> Unit)? = null,
     ): List<Computed> = withContext(Dispatchers.Default) {
         analyzeRecentOnCpu(repo, profile, maxDays, importedDeviceId, maxHROverride, nowSeconds,
             ownerSource, manualStepCoefficient, persistStepsCalibration, baselineEpoch, recoveryEpoch, diag,
-            useExperimentalSleepV2, sleepTraceSink, recoveryTraceSink)
+            useExperimentalSleepV2, sleepTraceSink, recoveryTraceSink, stepsTraceSink)
     }
 
     /** History span for the one-shot Effort rescore , large enough to cover any real wear history,
@@ -214,6 +221,11 @@ object IntelligenceEngine {
         // non-null each scored night emits its Charge term-breakdown to the .recovery-tagged strap log via
         // RecoveryScorerTrace.recoveryTrace, whose score is RecoveryScorer.recovery verbatim. Mirrors Swift.
         recoveryTraceSink: ((String) -> Unit)? = null,
+        // Steps test-mode trace sink (Test Centre). null = byte-identical default; when non-null each scored
+        // day emits its 5/MG raw-counter trace and (after the fit) the WHOOP-4 calibration trace to the
+        // .steps-tagged strap log. The trace recomputes the SAME wrap-aware sum + reuses calibrate verbatim,
+        // so the steps total is unchanged. Mirrors Swift.
+        stepsTraceSink: ((String) -> Unit)? = null,
     ): List<Computed> {
         val hrvCfg = Baselines.metricCfg["hrv"] ?: return emptyList()
         val rhrCfg = Baselines.metricCfg["resting_hr"] ?: return emptyList()
@@ -387,6 +399,19 @@ object IntelligenceEngine {
                 // strap log. The sink is already the routing closure, so there is no per-day collect/replay.
                 traceSink = sleepTraceSink,
             )
+
+            // Steps test mode: emit the 5/MG raw-counter trace for this day (cumulative @57 series +
+            // wrap-aware deltas + dropped deltas), tagged .steps. Only when the mode is on (the sink is
+            // non-null), so the default path emits zero .steps lines. The trace recomputes the SAME
+            // wrap-aware sum analyzeDay just ran over the SAME `daySteps`, so the steps total is unchanged.
+            if (stepsTraceSink != null) {
+                for (line in StepsEstimateEngineTrace.rawCounterTrace(
+                    daySteps = daySteps, dayKey = day, tzOffsetSeconds = tzOffsetSeconds,
+                    ticksPerStep = profile.stepTicksPerStep,
+                )) {
+                    stepsTraceSink(line)
+                }
+            }
 
             // Harvest the baseline-independent nightly aggregates (a day with no detected
             // sleep yields null → recorded as a missing night, i.e. skip-and-hold). The raw
@@ -752,6 +777,26 @@ object IntelligenceEngine {
             if (estRows.isNotEmpty()) repo.upsertMetricSeries(estRows)
             // Hand the fit back so the caller mirrors it into ProfileStore for the Settings/Steps screen.
             persistStepsCalibration(stepsCal)
+        }
+        // Steps test mode: emit the WHOOP-4 motion-volume calibration trace (per-day points + the fitted /
+        // manual / withheld calibration state) and a per-day estimate line, tagged .steps. Only when the mode
+        // is on (the sink is non-null), so the default path emits zero .steps lines here. The trace reuses
+        // StepsEstimateEngine.calibrate/estimate VERBATIM, so it cannot diverge from the coefficient + steps_est.
+        if (stepsTraceSink != null) {
+            for (line in StepsEstimateEngineTrace.calibrationTrace(calPoints, manualStepCoefficient)) {
+                stepsTraceSink(line)
+            }
+            if (stepsCal != null) {
+                for (dm in dailies) {
+                    if (refStepsByDay.containsKey(dm.day)) continue
+                    val motion = motionByDay[dm.day] ?: continue
+                    val est = StepsEstimateEngine.estimate(motion, stepsCal) ?: continue
+                    stepsTraceSink(
+                        "stepsEst day=${dm.day} steps=$est " +
+                            "motion=${Math.round(motion * 100.0) / 100.0} (motion-volume estimate)",
+                    )
+                }
+            }
         }
         // DURABILITY GUARD (iOS PR #395 cachedSleepKept): drop any freshly-detected session that
         // time-overlaps a night the user has already hand-corrected. A detected onset can drift

@@ -1128,6 +1128,15 @@ class WhoopBleClient(
                             if (testCentre.active(com.noop.testcentre.TestDomain.RECOVERY))
                                 { s -> log(s, com.noop.testcentre.TestDomain.RECOVERY) }
                             else null,
+                        // Steps test mode (Test Centre): when the STEPS domain is on, route this post-backfill
+                        // pass's per-day 5/MG raw-counter trace + WHOOP-4 calibration trace into the
+                        // .steps-tagged strap log too, not only the UI 15-min loop. Zero-cost when off (the
+                        // gate is one SharedPreferences bool read and the sink stays null, so the steps total
+                        // path is byte-identical). log() PII-scrubs.
+                        stepsTraceSink =
+                            if (testCentre.active(com.noop.testcentre.TestDomain.STEPS))
+                                { s -> log(s, com.noop.testcentre.TestDomain.STEPS) }
+                            else null,
                     )
                 }.onSuccess {
                     log("Backfill: post-sync scoring pass done")
