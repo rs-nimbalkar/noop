@@ -60,10 +60,15 @@ enum AIKeyStore {
     static var ownerProvider: String? { UserDefaults.standard.string(forKey: ownerKey) }
 
     /// Store (or replace) the API key for `owner`. Empty/whitespace input is treated as a clear.
-    static func save(_ key: String, owner: String) {
+    /// Returns true once the key is in the Keychain (or was cleared); false if the Keychain write
+    /// failed, in which case the owner marker is left untouched so it never points at a key that
+    /// isn't actually stored (#872). The live `read()`/`hasKey` gating already reads the real
+    /// Keychain, so this is defensive tidying of the discarded write result, not a behaviour change.
+    @discardableResult
+    static func save(_ key: String, owner: String) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { clear(); return }
-        guard let data = trimmed.data(using: .utf8) else { return }
+        guard !trimmed.isEmpty else { clear(); return true }
+        guard let data = trimmed.data(using: .utf8) else { return false }
 
         // Delete any existing item first so we always insert a single, fresh value.
         SecItemDelete(baseQuery as CFDictionary)
@@ -71,8 +76,10 @@ enum AIKeyStore {
         var attrs = baseQuery
         attrs[kSecValueData as String] = data
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(attrs as CFDictionary, nil)
+        let status = SecItemAdd(attrs as CFDictionary, nil)
+        guard status == errSecSuccess else { return false }
         UserDefaults.standard.set(owner, forKey: ownerKey)
+        return true
     }
 
     /// Read the stored API key, or nil if none is set.
@@ -108,11 +115,14 @@ enum AICoachError: LocalizedError {
     case server(Int, String)
     case network(String)
     case decode
+    case keySaveFailed
 
     var errorDescription: String? {
         switch self {
         case .noKey:
             return "Add your own API key first to use the coach."
+        case .keySaveFailed:
+            return "Couldn't save the key to the Keychain. The key was not stored, so try again."
         case .emptyQuestion:
             return "Type a question for the coach."
         case .badKey:
@@ -299,9 +309,15 @@ final class AICoachEngine: ObservableObject {
         objectWillChange.send()
     }
 
-    /// Store the user's pasted key securely. Clears any prior error.
+    /// Store the user's pasted key securely. Clears any prior error. If the Keychain write fails the
+    /// key is NOT saved, so surface that to the UI instead of silently proceeding (#872), and skip the
+    /// model refresh (it would only hit `.noKey`).
     func setKey(_ key: String) {
-        AIKeyStore.save(key, owner: provider.rawValue)
+        guard AIKeyStore.save(key, owner: provider.rawValue) else {
+            errorText = AICoachError.keySaveFailed.errorDescription
+            objectWillChange.send()
+            return
+        }
         errorText = nil
         objectWillChange.send() // `hasKey` is computed; nudge SwiftUI to re-read it.
         // Pull the user's ACTUAL current models from the provider so the picker is never stale.
@@ -326,6 +342,13 @@ final class AICoachEngine: ObservableObject {
         model = trimmed
     }
 
+    /// Test seam (DEBUG only): lets a test stand in for the live `fetchModels` network call so it can
+    /// control timing and which provider's ids come back. Production never sets this, so the real path
+    /// below is byte-identical in release builds.
+    #if DEBUG
+    var fetchModelsOverride: ((_ provider: AIProvider, _ key: String) async throws -> [String])?
+    #endif
+
     /// Best-effort: GET the chosen provider's models endpoint with the saved key and merge the
     /// returned ids into `availableModels`. Never crashes; failures land in `errorText` and leave
     /// the existing list intact. Requires a saved key.
@@ -336,21 +359,43 @@ final class AICoachEngine: ObservableObject {
         }
         errorText = nil
 
+        // Snapshot the provider BEFORE the await. The Picker isn't disabled during a refresh, so the
+        // user can switch providers mid-flight (#873). We fetch this provider's ids, then re-check on
+        // resume that it's still the live one, and merge against THIS same snapshot, so the guard and
+        // the merge always use one consistent provider, never a stale/mixed list for the wrong one.
+        let capturedProvider = provider
+
         do {
-            let ids = try await provider.client.fetchModels(key: key, session: session)
+            let ids: [String]
+            #if DEBUG
+            if let override = fetchModelsOverride {
+                ids = try await override(capturedProvider, key)
+            } else {
+                ids = try await capturedProvider.client.fetchModels(key: key, session: session)
+            }
+            #else
+            ids = try await capturedProvider.client.fetchModels(key: key, session: session)
+            #endif
+
+            // The user switched providers while we were awaiting, so these ids belong to the old one.
+            // Drop them rather than write a list for a provider that's no longer selected.
+            guard provider == capturedProvider else { return }
+
             guard !ids.isEmpty else {
                 errorText = AICoachError.decode.errorDescription
                 return
             }
 
-            // Merge: keep the built-in options on top, append any newly-discovered ids (sorted), and
-            // preserve a current custom selection if it isn't otherwise present.
-            let builtin = provider.modelOptions
+            // Merge: keep the captured provider's built-in options on top, append any newly-discovered
+            // ids (sorted), and preserve a current custom selection if it isn't otherwise present.
+            let builtin = capturedProvider.modelOptions
             let discovered = Set(ids).subtracting(builtin).sorted()
             var merged = builtin + discovered
             if !merged.contains(model) { merged.insert(model, at: 0) }
             availableModels = merged
         } catch {
+            // A switch mid-flight makes any error moot for the old provider, so don't surface it.
+            guard provider == capturedProvider else { return }
             errorText = AICoachError.network(error.localizedDescription).errorDescription
             return
         }
