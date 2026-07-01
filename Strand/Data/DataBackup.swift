@@ -84,7 +84,9 @@ enum DataBackup {
         do {
             // NSSavePanel already handled the "replace existing?" confirmation; clear the target.
             if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-            try writeBackupZip(dbURL: dbURL, to: dest)
+            // Reading the whole SQLite and DEFLATE-compressing it is multi-second on a big library;
+            // run it off the main actor so the UI never beach-balls. Only file paths cross the hop.
+            try await Task.detached(priority: .utility) { try writeBackupZip(dbURL: dbURL, to: dest) }.value
             return .exported(dest)
         } catch {
             return .failure("Export failed: \(error.localizedDescription)")
@@ -96,7 +98,8 @@ enum DataBackup {
         let staged = fm.temporaryDirectory.appendingPathComponent(defaultBackupName())
         do {
             if fm.fileExists(atPath: staged.path) { try fm.removeItem(at: staged) }
-            try writeBackupZip(dbURL: dbURL, to: staged)
+            // Off the main actor: same reason as the macOS branch (heavy read + DEFLATE). Only paths hop.
+            try await Task.detached(priority: .utility) { try writeBackupZip(dbURL: dbURL, to: staged) }.value
         } catch {
             return .failure("Export failed: \(error.localizedDescription)")
         }
@@ -185,7 +188,14 @@ enum DataBackup {
 
         // Hand the chosen file to the same hardened restore core the folder (Backup & Sync) path uses,
         // so the unzip / magic-byte / GRDB-origin / sidecar-snapshot / rollback logic lives in one place.
-        return restore(from: pickedSource, toDatabaseAt: dbPath)
+        // The restore does heavy synchronous file work (unzip, copy the whole DB, scan sqlite_master,
+        // snapshot + rollback), which can run tens of seconds on a big library. Push it off the main
+        // actor so the picker's UI thread stays live; the security-scoped access opened above (macOS)
+        // stays valid because the surrounding function is still awaiting here. Only Sendable value
+        // types (URL, String) cross the hop; the result hops back to main for handleBackup.
+        return await Task.detached(priority: .utility) {
+            restore(from: pickedSource, toDatabaseAt: dbPath)
+        }.value
     }
 
     /// Restore a chosen backup file directly, with NO picker. The Backup & Sync folder flow calls this

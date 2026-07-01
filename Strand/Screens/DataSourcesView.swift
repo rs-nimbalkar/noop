@@ -582,9 +582,11 @@ struct DataSourcesView: View {
                 return
             }
             do {
-                // `registryWriter` is the nonisolated GRDB handle the synchronous DeviceRegistryStore
-                // wraps — same construction the rest of the app uses (AppModel / BLEManager).
-                try DeviceRegistryStore(dbQueue: store.registryWriter).deleteAllData(deviceId: model.appleDeviceId)
+                // Route the purge through the WhoopStore actor's `deleteAllData` so the heavy 16+-table
+                // delete runs on the actor's OWN (off-main) executor. Calling the synchronous
+                // `DeviceRegistryStore(...).deleteAllData` directly here ran the whole transaction on the
+                // main actor and froze the UI on a large Apple Health dataset.
+                try await store.deleteAllData(deviceId: model.appleDeviceId)
                 await repo.refresh()
                 // #833/v7.7.2: this purge clears the body-composition series (weight/body_fat/lean_mass/bmi/
                 // vo2max) that live in metricSeries OUTSIDE refresh()'s diff, so refresh() may not bump

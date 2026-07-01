@@ -135,7 +135,14 @@ private struct DevicesContent: View {
                presenting: deleteDataTarget) { device in
             Button("Cancel", role: .cancel) { deleteDataTarget = nil }
             Button("Delete data", role: .destructive) {
-                registry.deleteDeviceData(device.id)
+                // Route the heavy 16+-table delete through the WhoopStore actor (off the main thread) so a
+                // large device dataset can't freeze the UI. Resolve the store handle inside the Task, then
+                // await the delete; the registry reloads the (now-emptied) list on completion.
+                let deviceId = device.id
+                Task {
+                    guard let store = await model.repo.storeHandle() else { return }
+                    await registry.deleteDeviceData(deviceId, store: store)
+                }
                 deleteDataTarget = nil
             }
         } message: { device in
