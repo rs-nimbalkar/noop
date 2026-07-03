@@ -20,7 +20,10 @@ struct DevicesView: View {
 
     var body: some View {
         ScreenScaffold(title: "Devices",
-                       subtitle: "Pair and manage the bands NOOP reads from.") {
+                       subtitle: "Pair and manage the bands NOOP reads from.",
+                       // The day-of-sky liquid backdrop, matching Today / Health / Sleep / Trends: a fixed,
+                       // full-bleed time-of-day sky behind the scroll content (it does not scroll).
+                       topBackground: liquidScaffoldSky()) {
             if let registry = model.deviceRegistry {
                 DevicesContent(registry: registry)
             } else {
@@ -60,6 +63,11 @@ private struct DevicesContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
+            // UPPERCASE overline section header, matching the liquid Today. Counts the paired bands so the
+            // multi-WHOOP reality reads at a glance.
+            sectionHead("YOUR BANDS", trailing: activeDevices.count == 1
+                        ? String(localized: "1 paired")
+                        : String(localized: "\(activeDevices.count) paired"))
             ForEach(Array(activeDevices.enumerated()), id: \.element.id) { idx, device in
                 DeviceCard(
                     device: device,
@@ -172,7 +180,7 @@ private struct DevicesContent: View {
 
     private var removedSection: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
-            Text("Removed").strandOverline()
+            sectionHead("REMOVED", trailing: String(localized: "Data kept"))
             ForEach(removedDevices) { device in
                 DeviceCard(
                     device: device,
@@ -198,6 +206,17 @@ private struct DevicesContent: View {
                 .foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// UPPERCASE overline section header with tracking + a muted trailing note, matching the liquid Today's
+    /// `sectionHead`. Keeps every page's section chrome identical.
+    private func sectionHead(_ title: LocalizedStringKey, trailing: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(StrandFont.overline).tracking(1.6).foregroundStyle(StrandPalette.textTertiary)
+            Spacer()
+            Text(trailing).font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+        }
+        .padding(.horizontal, 2)
     }
 
     // MARK: Logic
@@ -249,7 +268,9 @@ private struct DeviceCard: View {
     var onReAdd: (() -> Void)? = nil
     var onDeleteData: (() -> Void)? = nil
 
-    var body: some View {
+    /// The card's visible content. The required `body` wraps this in the whole-card liquid press button +
+    /// the ⋮ menu overlay.
+    private var cardContent: some View {
         StrandCard(padding: 18, tint: isActive ? StrandPalette.accent : nil) {
             VStack(alignment: .leading, spacing: NoopMetrics.cardInnerSpacing) {
                 HStack(alignment: .top, spacing: NoopMetrics.space3) {
@@ -298,19 +319,16 @@ private struct DeviceCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                HStack {
+                // Live battery for the active+connected device, shown as a liquid tube that fills to the
+                // charge — same surface for WHOOP / strap / FTMS. The tube reads the charge band's colour.
+                if let pct = liveBatteryPct {
+                    batteryTube(pct)
+                }
+
+                HStack(spacing: 6) {
                     Text(lastSeenLine)
                         .font(StrandFont.footnote)
                         .foregroundStyle(StrandPalette.textTertiary)
-                    // Live battery for the active+connected device — same surface for WHOOP / strap / FTMS.
-                    if let pct = liveBatteryPct {
-                        Text("·").font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
-                        Label("\(pct)%", systemImage: batterySymbol(pct))
-                            .font(StrandFont.footnote)
-                            .foregroundStyle(StrandPalette.textSecondary)
-                            .labelStyle(.titleAndIcon)
-                            .accessibilityLabel("Battery \(pct) percent")
-                    }
                     // Firmware version for the active+connected strap, read on connect.
                     if let fw = liveFirmware {
                         Text("·").font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
@@ -319,13 +337,83 @@ private struct DeviceCard: View {
                             .foregroundStyle(StrandPalette.textSecondary)
                             .accessibilityLabel("Firmware version \(fw)")
                     }
-                    Spacer()
-                    actionsMenu
+                    // The whole-card tap hint sits on the left; the ⋮ menu is a bottom-trailing overlay above
+                    // the press button (so its own taps win). No hint on the active card (no make-active),
+                    // nor on a removed card whose re-add is menu-only.
+                    if let hint = primaryActionHint {
+                        Text("·").font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                        Text(hint)
+                            .font(StrandFont.overlineScaled(10)).tracking(1.0)
+                            .foregroundStyle(StrandPalette.accent)
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(StrandPalette.accent)
+                            .accessibilityHidden(true)
+                    }
+                    Spacer(minLength: 44)   // leave room for the ⋮ menu overlay at the bottom-trailing
                 }
             }
         }
         .opacity(dimmed ? 0.6 : 1)
         .accessibilityElement(children: .contain)
+    }
+
+    /// The whole-card liquid press wrapper: tapping the card performs its PRIMARY action (make active for a
+    /// paired band, re-add for a removed one), with the settle-in `LiquidPressStyle`. The ⋮ menu is layered
+    /// on top as an overlay so it captures its own taps; cards with no primary action (the active one, or a
+    /// removed one whose re-add is menu-only) fall back to a plain container so nothing taps by accident.
+    var body: some View {
+        Group {
+            if let action = primaryAction {
+                Button(action: action) { cardContent }
+                    .buttonStyle(LiquidPressStyle())
+            } else {
+                cardContent
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            actionsMenu
+                .padding(18)
+        }
+    }
+
+    /// The card's primary tap action, or nil when there isn't one. A paired-but-not-active band → make it
+    /// active; a removed band → re-add it as active. The active band and any card without those callbacks
+    /// have no whole-card tap (their controls live entirely in the ⋮ menu).
+    private var primaryAction: (() -> Void)? {
+        if device.status == .archived { return onReAdd }
+        if !isActive { return onMakeActive }
+        return nil
+    }
+
+    /// Short accent hint mirroring the primary tap, shown in the footer row. nil when the card has no
+    /// whole-card action (active band / menu-only removed band).
+    private var primaryActionHint: String? {
+        if device.status == .archived { return onReAdd == nil ? nil : String(localized: "Make active") }
+        if !isActive { return String(localized: "Make active") }
+        return nil
+    }
+
+    /// The live battery as a liquid tube (fills to the charge, coloured by band) with a trailing percent.
+    /// Static-posed so it costs nothing per frame — one of many small liquid elements on the screen.
+    private func batteryTube(_ pct: Int) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: batterySymbol(pct))
+                .font(StrandFont.caption)
+                .foregroundStyle(batteryTint(pct))
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            LiquidTube(frac: Double(pct) / 100, tint: batteryTint(pct), height: 8, animated: false)
+            Text("\(pct)%")
+                .font(StrandFont.captionNumber)
+                .foregroundStyle(StrandPalette.textSecondary)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery \(pct) percent")
+    }
+
+    /// The charge-band colour for the battery tube/icon (mirrors the menu-bar battery buckets).
+    private func batteryTint(_ pct: Int) -> Color {
+        pct < 15 ? StrandPalette.statusCritical : pct < 35 ? StrandPalette.statusWarning : StrandPalette.chargeColor
     }
 
     private var statePill: some View {
@@ -616,7 +704,8 @@ struct DeviceCardCatalog: View {
 
     var body: some View {
         ScreenScaffold(title: "Devices",
-                       subtitle: "What each band captures (and what NOOP uses it for).") {
+                       subtitle: "What each band captures (and what NOOP uses it for).",
+                       topBackground: liquidScaffoldSky()) {
             VStack(spacing: NoopMetrics.gap) {
                 DeviceCard(device: Self.dev("whoop-4d", "WHOOP", "4.0", Self.whoopCaps),
                            isActive: true, isLiveConnected: true,
@@ -649,7 +738,8 @@ struct DeviceCardCatalog: View {
 struct OuraDeviceDemoScreen: View {
     var body: some View {
         ScreenScaffold(title: "Devices",
-                       subtitle: "A locally-adopted Oura ring, in beta.") {
+                       subtitle: "A locally-adopted Oura ring, in beta.",
+                       topBackground: liquidScaffoldSky()) {
             VStack(spacing: NoopMetrics.gap) {
                 // Active + connected so the card shows "Active · Live" + a live battery readout.
                 DeviceCard(device: DeviceCardCatalog.oura("Oura Ring 3"),
