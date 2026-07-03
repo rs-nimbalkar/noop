@@ -183,7 +183,9 @@ struct MetricExplorerView: View {
         // cards), so LazyVStack genuinely builds the off-screen category cards on demand. No
         // `staggeredAppear` here and identical column alignment/spacing (20) + per-child bottom padding,
         // so the layout is byte-identical to the eager VStack.
-        ScreenScaffold(title: "Explore", subtitle: "Every signal, one tap deep.", lazy: true) {
+        ScreenScaffold(title: "Explore", subtitle: "Every signal, one tap deep.",
+                       onRefresh: { await repo.refresh() }, lazy: true,
+                       topBackground: liquidScaffoldSky()) {
             // A quiet, non-blocking hint while the empty-dot probe runs its first pass. The rows below
             // render in full immediately regardless — this only reassures during the scan, and never
             // leaves the screen reading as a bare/empty list before the probe lands (#199).
@@ -613,23 +615,23 @@ struct MetricDetailView: View {
         }()
         let fraction = value.flatMap { metricGaugeFraction(metric, value: $0) }
 
-        ZStack(alignment: .top) {
-            ScenicHeroBackground(domain: domain)
-                .clipShape(RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous))
-
-            VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-                // Title + range control over the starfield.
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(MetricCatalog.categoryDisplayName(metric.category).uppercased()).strandOverline()
-                        Text(metric.title)
-                            .font(StrandFont.title2)
-                            .foregroundStyle(StrandPalette.textPrimary)
-                    }
-                    Spacer()
-                    SegmentedPillControl(ExploreRange.allCases, selection: selectionBinding,
-                                         isEnabled: isUnlocked) { $0.label }
+        // Gap fix (Aaron 2026-07-02): draw the starfield as the content's BACKGROUND, not as a
+        // stretching ZStack sibling — an unconstrained ScenicHeroBackground inside a ScrollView filled
+        // the whole viewport and left a huge blank band above the chart. As a .background it sizes to
+        // the hero content, so the number/ring sits directly under the range pill.
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                // Category + title on their OWN full-width row so a long title ("Heart Rate Variability")
+                // is never crushed into a letter-per-line column by the range pill (Aaron 2026-07-02).
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(MetricCatalog.categoryDisplayName(metric.category).uppercased()).strandOverline()
+                    Text(metric.title)
+                        .font(StrandFont.title2)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                // Range control on its own row beneath the title.
+                SegmentedPillControl(ExploreRange.allCases, selection: selectionBinding,
+                                     isEnabled: isUnlocked) { $0.label }
 
                 // The headline read-out: a ring gauge for 0–100 scores, else a big number.
                 HStack {
@@ -681,8 +683,9 @@ struct MetricDetailView: View {
                         .foregroundStyle(StrandPalette.textTertiary)
                 }
             }
-            .padding(NoopMetrics.cardPadding)
-        }
+        .padding(NoopMetrics.cardPadding)
+        .background(ScenicHeroBackground(domain: domain))
+        .clipShape(RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous))
         // The hero shows the LATEST available point (range-independent), so the gauge
         // settles once on appear — like TodayView's rings.
         .onAppear {

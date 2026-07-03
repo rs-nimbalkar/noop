@@ -6,7 +6,7 @@ import SwiftUI
 // the uniform, instrument-grade look from the reference. Do not invent ad-hoc cards.
 
 public enum NoopMetrics {
-    public static let cardRadius: CGFloat = 20   // Apple x WHOOP: rounded cards
+    public static let cardRadius: CGFloat = 22   // Apple x WHOOP rounded cards — matches the liquid home card (LiquidTodayView.card)   // Apple x WHOOP: rounded cards
     public static let cardPadding: CGFloat = 16  // Apple x WHOOP: roomier card interior
     public static let gap: CGFloat = 12          // gap between cards
     public static let sectionGap: CGFloat = 22   // Apple x WHOOP: breathing room (not cramped)
@@ -397,8 +397,8 @@ public struct SegmentedPillControl<T: Hashable>: View {
                         // Fill the segment height so the selected pill has EQUAL margins to the track
                         // on every side. (The old compact pill inside a taller 44pt touch frame left
                         // more vertical margin than horizontal — it read as off-centre.)
-                        .frame(minWidth: 32, maxHeight: .infinity)
-                        .padding(.horizontal, 12)
+                        .frame(minWidth: 26, maxHeight: .infinity)
+                        .padding(.horizontal, 9)
                         .background(
                             // WHOOP selection chrome: a flat LIGHTER-grey pill on dark (white ink), a flat
                             // blue accent pill on light — no gold, no gradient.
@@ -411,13 +411,13 @@ public struct SegmentedPillControl<T: Hashable>: View {
                         .contentShape(Capsule(style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .frame(height: 36)   // segment height; the pill fills it for an even inset
+                .frame(height: 32)   // segment height; the pill fills it for an even inset
                 .disabled(!enabled)
                 // Announce the active range to VoiceOver and give a non-colour cue.
                 .accessibilityAddTraits(sel ? .isSelected : [])
             }
         }
-        .padding(4)
+        .padding(3)
         .background(StrandPalette.surfaceInset, in: Capsule(style: .continuous))
         .overlay(Capsule(style: .continuous).strokeBorder(StrandPalette.hairline, lineWidth: 1))
     }

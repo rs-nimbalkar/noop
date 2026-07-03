@@ -295,6 +295,13 @@ final class Backfiller {
     /// TRUE so the records following this END become the next chunk. An END with no accumulated
     /// records is still acked (it advances the strap's trim) — that's how the offload progresses.
     /// `endFrame` carries the 8-byte `end_data` the ack requires.
+    /// The pure decode result of one offload chunk, produced OFF the main actor (see finishChunk).
+    private struct DecodedChunk {
+        let parsed: [ParsedFrame]
+        let decoded: Streams
+        let rejected: [[UInt8]]
+    }
+
     private func finishChunk(unix: UInt32, trim: UInt32, endFrame: [UInt8]) async {
         guard let endData = Backfiller.endData(from: endFrame, family: family) else { return }
 
@@ -323,7 +330,22 @@ final class Backfiller {
             // decodes to correct wall time, and we can persist + ack + upload. The correlation is only
             // truly required to map REALTIME (type-40/43) device-epoch timestamps, never in a hist chunk.
             let ref = clockRef ?? { let now = Int(Date().timeIntervalSince1970); return ClockRef(device: now, wall: now) }()
-            let parsed = frames.map { parseFrame($0, family: family) }
+            // PERF (Aaron 2026-07-03): the heavy decode — parseFrame ×N, extractHistoricalStreams, and the
+            // reject-classifier's SECOND full parse — runs OFF the main actor so a long history offload no
+            // longer freezes the UI (was ~54K parseFrame calls on main for a 27K-row import). Pure functions
+            // only; every @Published write, the store insert, and the ack/cursor sequence below stay on the
+            // main actor in the SAME order, so the persist→archive→cursor→ack trim-safety is untouched.
+            let fam = family
+            let dev = ref.device, wall = ref.wall
+            let oldest = sessionOldestUnix, newest = sessionNewestUnix
+            let extractFn = extract   // keep the injected Extractor seam (tests override it); prod == extractHistoricalStreams
+            let d = await Task.detached(priority: .utility) { () -> DecodedChunk in
+                let parsed = frames.map { parseFrame($0, family: fam) }
+                let decoded = extractFn(parsed, dev, wall, oldest, newest)
+                let rejected = rejectedHistoricalRecords(frames, family: fam)
+                return DecodedChunk(parsed: parsed, decoded: decoded, rejected: rejected)
+            }.value
+            let parsed = d.parsed
             // Observability (PR #241): log which layout this strap emits on a HEALTHY sync too — the
             // unmapped-version path below only fires for layouts NOOP can't decode, so a normal log
             // never revealed v18/v24/v25/v26. Once per distinct layout this session.
@@ -360,7 +382,7 @@ final class Backfiller {
                 loggedUnmappedVersions.insert(v)
                 log?("Historical records use firmware layout v\(v), which NOOP doesn't decode yet — no motion data, so sleep can't be computed from the strap. Please report this (issue #30).")
             }
-            let decoded = extract(parsed, ref.device, ref.wall, sessionOldestUnix, sessionNewestUnix)
+            let decoded = d.decoded
             // #547: surface a bad-clock strap. extractHistoricalStreams DROPPED any record whose own unix
             // timestamp was implausible (far-past / bogus-2027 / future-dated) before it could pollute the
             // DB. Log it (once it's accrued at least one this session, on the first chunk that sees it) so
@@ -382,7 +404,7 @@ final class Backfiller {
             // type-50 console/diagnostic frames, which decode to 0 rows by design and are NOT a loss
             // (the "rejected frames" red herring users kept reporting — #77/#120). Drives both the
             // log wording below and the archive guard further down.
-            let rejected = rejectedHistoricalRecords(frames, family: family)
+            let rejected = d.rejected
             // Tally this chunk's outcome so a completed-but-empty session is distinguishable from a
             // caught-up one (#77 family): did it decode sensor rows, and was it console-only?
             onChunk?(!decoded.isEmpty, decoded.isEmpty && rejected.isEmpty)
